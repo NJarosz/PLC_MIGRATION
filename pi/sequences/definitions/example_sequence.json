@@ -1,13 +1,14 @@
 {
     "sequence_id": "seq_001",
-    "version": 1,
+    "version": 2,
     "author": "nicholas",
-    "description": "Dev test — alternating relays",
+    "description": "Dev test — individual relay control example",
     "target_plc": "devpi01",
     "steps": [
-        { "relay_mask": 1, "duration_ms": 2000, "note": "Relay 1 ON" },
-        { "relay_mask": 0, "duration_ms": 1000, "note": "All OFF" },
-        { "relay_mask": 2, "duration_ms": 1200, "note": "Relay 2 ON" },
-        { "relay_mask": 0, "duration_ms": 500,  "note": "All OFF" }
+        { "relays": [1],    "duration_ms": 2000, "note": "Relay 1 ON" },
+        { "relays": [1, 2], "duration_ms": 500,  "note": "Relay 2 joins — both ON" },
+        { "relays": [2],    "duration_ms": 1200, "note": "Relay 1 OFF, Relay 2 stays ON" },
+        { "relays": [3],    "duration_ms": 800,  "note": "Relay 3 ON only" },
+        { "relays": [],     "duration_ms": 500,  "note": "All OFF" }
     ]
 }

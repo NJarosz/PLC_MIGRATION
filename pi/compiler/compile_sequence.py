@@ -21,10 +21,33 @@ import argparse
 from datetime import datetime, timezone
 
 # Must match STM32 SequenceStep_t: __attribute__((packed)) { uint8_t relay_mask; uint32_t duration_ms; }
-STEP_FORMAT   = "<BI"
-STEP_SIZE     = struct.calcsize(STEP_FORMAT)   # 5 bytes
-MAX_STEPS     = 32
-MAX_RELAY_MASK = 0x0F   # 4 relays (bits 0-3)
+STEP_FORMAT = "<BI"
+STEP_SIZE   = struct.calcsize(STEP_FORMAT)   # 5 bytes
+MAX_STEPS   = 32
+
+# Maps human relay numbers (1–4) to their bitmask values.
+# Derived from sequence_engine.c: relay_requested[i] = (relay_mask & (1 << i)) != 0
+# Relay 1 = bit 0 = 0x01, Relay 2 = bit 1 = 0x02, Relay 3 = bit 2 = 0x04, Relay 4 = bit 3 = 0x08
+RELAY_BITS = {1: 0x01, 2: 0x02, 3: 0x04, 4: 0x08}
+NUM_RELAYS = len(RELAY_BITS)
+
+
+def relays_to_mask(relays: list, step_index: int) -> int:
+    """Convert a list of relay numbers (e.g. [1, 3]) to a bitmask (e.g. 0x05)."""
+    if not isinstance(relays, list):
+        raise ValueError(f"Step {step_index}: 'relays' must be a list, got {relays!r}")
+    seen = set()
+    mask = 0
+    for r in relays:
+        if not isinstance(r, int) or r not in RELAY_BITS:
+            raise ValueError(
+                f"Step {step_index}: relay {r!r} is invalid — must be an integer in 1–{NUM_RELAYS}"
+            )
+        if r in seen:
+            raise ValueError(f"Step {step_index}: relay {r} is listed more than once")
+        seen.add(r)
+        mask |= RELAY_BITS[r]
+    return mask
 
 
 def validate(definition: dict):
@@ -34,17 +57,17 @@ def validate(definition: dict):
 
     steps = definition["steps"]
     if not isinstance(steps, list) or not (1 <= len(steps) <= MAX_STEPS):
-        raise ValueError(f"steps must be a list of 1–{MAX_STEPS} entries, got {len(steps)}")
+        raise ValueError(f"'steps' must be a list of 1–{MAX_STEPS} entries, got {len(steps)}")
 
     for i, step in enumerate(steps):
-        mask     = step.get("relay_mask")
-        duration = step.get("duration_ms")
-        if mask is None or duration is None:
-            raise ValueError(f"Step {i}: missing 'relay_mask' or 'duration_ms'")
-        if not isinstance(mask, int) or not (0 <= mask <= MAX_RELAY_MASK):
-            raise ValueError(f"Step {i}: relay_mask {mask!r} must be int in [0, {MAX_RELAY_MASK}]")
-        if not isinstance(duration, int) or duration <= 0:
-            raise ValueError(f"Step {i}: duration_ms {duration!r} must be a positive integer")
+        if "relays" not in step:
+            raise ValueError(f"Step {i}: missing 'relays' field")
+        if "duration_ms" not in step:
+            raise ValueError(f"Step {i}: missing 'duration_ms' field")
+        relays_to_mask(step["relays"], i)   # validates relay numbers and duplicates
+        duration = step["duration_ms"]
+        if not isinstance(duration, int) or duration < 0:
+            raise ValueError(f"Step {i}: duration_ms must be a non-negative integer, got {duration!r}")
 
 
 def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> tuple[str, dict]:
@@ -60,8 +83,8 @@ def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> t
     os.makedirs(output_dir, exist_ok=True)
 
     blob = b"".join(
-        struct.pack(STEP_FORMAT, step["relay_mask"], step["duration_ms"])
-        for step in steps
+        struct.pack(STEP_FORMAT, relays_to_mask(step["relays"], i), step["duration_ms"])
+        for i, step in enumerate(steps)
     )
 
     out_filename = f"{seq_id}_v{version}.bin"
