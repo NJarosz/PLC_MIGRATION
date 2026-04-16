@@ -1,0 +1,8 @@
+{
+    "plc_id": "devpi01",
+    "description": "Development PLC — Nucleo F446RE test bench",
+    "active_sequence": null,
+    "active_version": null,
+    "active_bin": null,
+    "deployed_at": null
+}
