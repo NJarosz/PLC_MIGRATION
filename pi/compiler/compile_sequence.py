@@ -13,6 +13,7 @@ Output:
     sequences/compiled/<sequence_id>_v<version>.bin
 """
 
+import hashlib
 import struct
 import json
 import sys
@@ -87,12 +88,17 @@ def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> t
         for i, step in enumerate(steps)
     )
 
+    # Append SHA-256 of the sequence payload — verified by STM32 before storing
+    digest = hashlib.sha256(blob).digest()   # 32 bytes
+    signed = blob + digest
+
     out_filename = f"{seq_id}_v{version}.bin"
     out_path     = os.path.join(output_dir, out_filename)
     with open(out_path, "wb") as f:
-        f.write(blob)
+        f.write(signed)
 
-    print(f"[compile] {out_path}  ({len(blob)} bytes, {len(steps)} steps)")
+    print(f"[compile] {out_path}  ({len(blob)} bytes payload + 32 bytes SHA-256)")
+    print(f"[compile] hash: {digest.hex()}")
     return out_path, definition
 
 

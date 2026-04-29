@@ -3,6 +3,7 @@
 #include "sequence_storage.h"
 #include "sequence_engine.h"
 #include "logger.h"
+#include "sha256.h"
 #include "usart.h"
 #include <string.h>
 
@@ -14,6 +15,7 @@ typedef enum {
     RX_WAIT_START,
     RX_WAIT_LEN,
     RX_WAIT_PAYLOAD,
+    RX_WAIT_HASH,    // collect 32-byte SHA-256 after payload
     RX_WAIT_END
 } RxState_t;
 
@@ -83,22 +85,41 @@ void SupervisorComms_Task(void)
             }
 
             if (rx_state == RX_WAIT_PAYLOAD && capture_idx >= (2 + rx_len)) {
+                rx_state = RX_WAIT_HASH;
+            }
+
+            if (rx_state == RX_WAIT_HASH &&
+                capture_idx >= (2 + rx_len + SHA256_BLOCK_SIZE)) {
                 rx_state = RX_WAIT_END;
             }
 
             if (rx_state == RX_WAIT_END && byte == END_BYTE) {
-                if (rx_len > 0 && rx_len % sizeof(SequenceStep_t) == 0) {
+                // Verify SHA-256: hash covers the sequence payload bytes only
+                uint8_t computed_hash[SHA256_BLOCK_SIZE];
+                SHA256_CTX sha_ctx;
+                sha256_init(&sha_ctx);
+                sha256_update(&sha_ctx, &capture_buffer[2], rx_len);
+                sha256_final(&sha_ctx, computed_hash);
+
+                const uint8_t *received_hash = &capture_buffer[2 + rx_len];
+
+                if (memcmp(computed_hash, received_hash, SHA256_BLOCK_SIZE) != 0) {
+                    Logger_Log(LOG_TIER_B, EVENT_COMMS_HASH_MISMATCH, 0);
+                    capturing = false;
+                    rx_state = RX_WAIT_START;
+                } else if (rx_len > 0 && rx_len % sizeof(SequenceStep_t) == 0) {
                     uint8_t step_count = rx_len / sizeof(SequenceStep_t);
                     SequenceStep_t steps[MAX_SEQUENCE_STEPS];
                     memcpy(steps, &capture_buffer[2], rx_len);   // skip START + LEN
                     SequenceStorage_Save(steps, step_count);
                     Logger_Log(LOG_TIER_B, EVENT_SEQUENCE_RECEIVED, step_count);
+                    capturing = false;
+                    rx_state = RX_WAIT_START;
                 } else {
                     Logger_Log(LOG_TIER_B, EVENT_COMMS_FRAME_INVALID, rx_len);
+                    capturing = false;
+                    rx_state = RX_WAIT_START;
                 }
-
-                capturing = false;
-                rx_state = RX_WAIT_START;
             }
         }
     }

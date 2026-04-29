@@ -33,6 +33,7 @@ typedef enum {
     EVENT_COMMS_RX_TIMEOUT    = 310,  // partial frame abandoned after 800ms; data = bytes captured
     EVENT_COMMS_FRAME_INVALID = 311,  // frame length not a multiple of step size; data = rx_len
     EVENT_COMMS_UART_ERROR    = 312,  // HAL_UART_Receive returned HAL_ERROR; data = UART SR
+    EVENT_COMMS_HASH_MISMATCH = 313,  // received hash did not match computed hash; frame rejected
     EVENT_LOGIN = 600,
 	EVENT_SEQUENCE_START = 601,
     EVENT_LOGOUT = 602,
