@@ -15,7 +15,8 @@
 #define START_BYTE   0xAA
 #define END_BYTE     0x55
 #define SHA256_SIZE  32    // bytes appended to .bin by the Pi compiler
-#define MAX_PAYLOAD  250   // max total fetched size (blob + SHA256_SIZE)
+#define META_SIZE    20    // SequenceMetadata_t: version(1) + step_count(1) + seq_id(16) + reserved(2)
+#define MAX_PAYLOAD  300   // max total fetched size (meta + blob + SHA256_SIZE)
 #define STEP_SIZE    5     // sizeof(SequenceStep_t): uint8 relay_mask + uint32 duration_ms
 
 HardwareSerial SerialSTM(1);  // UART1
@@ -97,35 +98,36 @@ bool fetchAndSend() {
     }
     http.end();
 
-    if (payloadLen < SHA256_SIZE + STEP_SIZE) {
+    if (payloadLen < META_SIZE + SHA256_SIZE + STEP_SIZE) {
         Serial.printf("[BRIDGE] Response too short: %d bytes\n", payloadLen);
         return false;
     }
 
-    // Pi appends SHA-256(blob) to the .bin file — split them here
-    int blobLen = payloadLen - SHA256_SIZE;
+    // Pi output: meta(20B) + blob + sha256(meta+blob, 32B) — split them here
+    int blobLen = payloadLen - META_SIZE - SHA256_SIZE;
     if (blobLen % STEP_SIZE != 0) {
         Serial.printf("[BRIDGE] Blob length %d is not a multiple of %d — corrupt?\n",
                       blobLen, STEP_SIZE);
         return false;
     }
 
-    Serial.printf("[BRIDGE] %d bytes blob (%d steps) + 32 bytes hash\n",
-                  blobLen, blobLen / STEP_SIZE);
+    Serial.printf("[BRIDGE] %d bytes meta + %d bytes blob (%d steps) + 32 bytes hash\n",
+                  META_SIZE, blobLen, blobLen / STEP_SIZE);
 
-    // Frame: [ 0xAA | LEN | blob(blobLen bytes) | hash(32 bytes) | 0x55 ]
-    // LEN covers blob only — STM32 uses it to know where blob ends and hash begins.
+    // Frame: [ 0xAA | BLOB_LEN | meta(20B) | blob(blobLen B) | hash(32B) | 0x55 ]
+    // BLOB_LEN covers blob only — STM32 uses it to locate hash start.
+    // Meta and hash are forwarded as-is from the Pi .bin file.
     // 12ms inter-byte delay — STM32 scan cycle is HAL_Delay(10).
     uint8_t b;
     b = START_BYTE;          SerialSTM.write(b); delay(12);
     b = (uint8_t)blobLen;    SerialSTM.write(b); delay(12);
-    for (int i = 0; i < payloadLen; i++) {   // sends blob then hash contiguously
+    for (int i = 0; i < payloadLen; i++) {   // sends meta + blob + hash contiguously
         SerialSTM.write(payload[i]);
         delay(12);
     }
     b = END_BYTE;            SerialSTM.write(b); delay(12);
 
-    Serial.printf("[BRIDGE] Frame sent: AA %02X [%d blob + 32 hash] 55\n",
-                  blobLen, blobLen);
+    Serial.printf("[BRIDGE] Frame sent: AA %02X [%d meta + %d blob + 32 hash] 55\n",
+                  blobLen, META_SIZE, blobLen);
     return true;
 }

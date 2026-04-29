@@ -26,6 +26,11 @@ STEP_FORMAT = "<BI"
 STEP_SIZE   = struct.calcsize(STEP_FORMAT)   # 5 bytes
 MAX_STEPS   = 32
 
+# Must match SequenceMetadata_t in supervisor_comms.h (20 bytes, packed):
+#   uint8_t version, uint8_t step_count, uint8_t seq_id[16], uint8_t reserved[2]
+META_FORMAT = "<BB16s2s"
+META_SIZE   = struct.calcsize(META_FORMAT)   # 20 bytes
+
 # Maps human relay numbers (1–4) to their bitmask values.
 # Derived from sequence_engine.c: relay_requested[i] = (relay_mask & (1 << i)) != 0
 # Relay 1 = bit 0 = 0x01, Relay 2 = bit 1 = 0x02, Relay 3 = bit 2 = 0x04, Relay 4 = bit 3 = 0x08
@@ -88,16 +93,26 @@ def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> t
         for i, step in enumerate(steps)
     )
 
-    # Append SHA-256 of the sequence payload — verified by STM32 before storing
-    digest = hashlib.sha256(blob).digest()   # 32 bytes
-    signed = blob + digest
+    # Pack metadata (20 bytes) — must match SequenceMetadata_t
+    seq_id_bytes = seq_id.encode("ascii")[:15].ljust(16, b"\x00")  # null-padded, max 15 chars
+    meta = struct.pack(META_FORMAT,
+                       version & 0xFF,
+                       len(steps) & 0xFF,
+                       seq_id_bytes,
+                       b"\x00\x00")
+
+    assert len(meta) == META_SIZE, f"metadata size mismatch: {len(meta)} != {META_SIZE}"
+
+    # SHA-256 covers meta + blob — verified by STM32 before storing
+    digest = hashlib.sha256(meta + blob).digest()   # 32 bytes
+    signed = meta + blob + digest
 
     out_filename = f"{seq_id}_v{version}.bin"
     out_path     = os.path.join(output_dir, out_filename)
     with open(out_path, "wb") as f:
         f.write(signed)
 
-    print(f"[compile] {out_path}  ({len(blob)} bytes payload + 32 bytes SHA-256)")
+    print(f"[compile] {out_path}  ({META_SIZE} bytes meta + {len(blob)} bytes payload + 32 bytes SHA-256)")
     print(f"[compile] hash: {digest.hex()}")
     return out_path, definition
 

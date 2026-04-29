@@ -34,6 +34,7 @@ typedef enum {
     EVENT_COMMS_FRAME_INVALID = 311,  // frame length not a multiple of step size; data = rx_len
     EVENT_COMMS_UART_ERROR    = 312,  // HAL_UART_Receive returned HAL_ERROR; data = UART SR
     EVENT_COMMS_HASH_MISMATCH = 313,  // received hash did not match computed hash; frame rejected
+    EVENT_COMMS_META_INVALID  = 314,  // metadata step_count disagrees with blob length; data = step_count from meta
     EVENT_LOGIN = 600,
 	EVENT_SEQUENCE_START = 601,
     EVENT_LOGOUT = 602,
