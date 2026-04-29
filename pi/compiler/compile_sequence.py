@@ -26,10 +26,10 @@ STEP_FORMAT = "<BI"
 STEP_SIZE   = struct.calcsize(STEP_FORMAT)   # 5 bytes
 MAX_STEPS   = 32
 
-# Must match SequenceMetadata_t in supervisor_comms.h (20 bytes, packed):
-#   uint8_t version, uint8_t step_count, uint8_t seq_id[16], uint8_t reserved[2]
-META_FORMAT = "<BB16s2s"
-META_SIZE   = struct.calcsize(META_FORMAT)   # 20 bytes
+# Must match SequenceMetadata_t in supervisor_comms.h (40 bytes, packed):
+#   version(1), step_count(1), seq_name(16), part_num(12), machine_id(8), reserved(2)
+META_FORMAT = "<BB16s12s8s2s"
+META_SIZE   = struct.calcsize(META_FORMAT)   # 40 bytes
 
 # Maps human relay numbers (1–4) to their bitmask values.
 # Derived from sequence_engine.c: relay_requested[i] = (relay_mask & (1 << i)) != 0
@@ -93,12 +93,16 @@ def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> t
         for i, step in enumerate(steps)
     )
 
-    # Pack metadata (20 bytes) — must match SequenceMetadata_t
-    seq_id_bytes = seq_id.encode("ascii")[:15].ljust(16, b"\x00")  # null-padded, max 15 chars
+    # Pack metadata (40 bytes) — must match SequenceMetadata_t
+    seq_name_bytes   = seq_id.encode("ascii")[:15].ljust(16, b"\x00")   # null-padded, max 15 chars
+    part_num_bytes   = definition.get("part_num", "").encode("ascii")[:11].ljust(12, b"\x00")
+    machine_id_bytes = definition.get("machine_id", "").encode("ascii")[:7].ljust(8, b"\x00")
     meta = struct.pack(META_FORMAT,
                        version & 0xFF,
                        len(steps) & 0xFF,
-                       seq_id_bytes,
+                       seq_name_bytes,
+                       part_num_bytes,
+                       machine_id_bytes,
                        b"\x00\x00")
 
     assert len(meta) == META_SIZE, f"metadata size mismatch: {len(meta)} != {META_SIZE}"
@@ -112,7 +116,7 @@ def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> t
     with open(out_path, "wb") as f:
         f.write(signed)
 
-    print(f"[compile] {out_path}  ({META_SIZE} bytes meta + {len(blob)} bytes payload + 32 bytes SHA-256)")
+    print(f"[compile] {out_path}  ({META_SIZE}B meta + {len(blob)}B payload + 32B SHA-256 = {len(signed)}B total)")
     print(f"[compile] hash: {digest.hex()}")
     return out_path, definition
 

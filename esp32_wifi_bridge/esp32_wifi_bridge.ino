@@ -15,7 +15,7 @@
 #define START_BYTE   0xAA
 #define END_BYTE     0x55
 #define SHA256_SIZE  32    // bytes appended to .bin by the Pi compiler
-#define META_SIZE    20    // SequenceMetadata_t: version(1) + step_count(1) + seq_id(16) + reserved(2)
+#define META_SIZE    40    // SequenceMetadata_t: version(1) + step_count(1) + seq_name(16) + part_num(12) + machine_id(8) + reserved(2)
 #define MAX_PAYLOAD  300   // max total fetched size (meta + blob + SHA256_SIZE)
 #define STEP_SIZE    5     // sizeof(SequenceStep_t): uint8 relay_mask + uint32 duration_ms
 

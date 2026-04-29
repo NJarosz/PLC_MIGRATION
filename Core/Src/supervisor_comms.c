@@ -6,6 +6,7 @@
 #include "sha256.h"
 #include "usart.h"
 #include <string.h>
+#include <stdio.h>
 
 #define START_BYTE 0xAA
 #define END_BYTE   0x55
@@ -129,6 +130,15 @@ void SupervisorComms_Task(void)
                         memcpy(steps, &capture_buffer[2 + META_SIZE], rx_len);
                         SequenceStorage_Save(steps, expected_steps);
                         Logger_Log(LOG_TIER_B, EVENT_SEQUENCE_RECEIVED, expected_steps);
+
+                        // LCD mock — replace with actual LCD driver calls when hardware is ready
+                        printf("--- SEQUENCE LOADED ---\r\n");
+                        printf("Seq : %.*s\r\n",  15, (char*)meta.seq_name);
+                        printf("Part: %.*s\r\n",  11, (char*)meta.part_num);
+                        printf("Mach: %.*s\r\n",   7, (char*)meta.machine_id);
+                        printf("Steps: %u  v%u\r\n", expected_steps, meta.version);
+                        printf("-----------------------\r\n");
+
                         capturing = false;
                         rx_state = RX_WAIT_START;
                     }

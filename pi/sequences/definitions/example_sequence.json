@@ -1,6 +1,8 @@
 {
     "sequence_id": "seq_001",
     "version": 2,
+    "part_num": "PN-000001",
+    "machine_id": "M001",
     "author": "nicholas",
     "description": "Dev test — individual relay control example",
     "target_plc": "devpi01",
