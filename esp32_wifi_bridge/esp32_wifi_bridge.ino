@@ -21,8 +21,9 @@
 
 HardwareSerial SerialSTM(1);  // UART1
 
-// --- forward declaration ---
+// --- forward declarations ---
 bool fetchAndSend();
+void uploadLogs();
 
 void setup() {
     Serial.begin(115200);
@@ -55,6 +56,9 @@ void loop() {
             if (!fetchAndSend()) {
                 Serial.println("[BRIDGE] Fetch/send FAILED");
             }
+        } else if (cmd == "UPLOAD_LOGS") {
+            Serial.println("[BRIDGE] Receiving log upload from STM32...");
+            uploadLogs();
         }
     }
     delay(10);
@@ -130,4 +134,54 @@ bool fetchAndSend() {
     Serial.printf("[BRIDGE] Frame sent: AA %02X [%d meta + %d blob + 32 hash] 55\n",
                   blobLen, META_SIZE, blobLen);
     return true;
+}
+
+void uploadLogs() {
+    String body = "[";
+    bool first = true;
+    uint32_t deadline = millis() + 5000;  // 5s to receive all lines
+
+    while (millis() < deadline) {
+        if (!SerialSTM.available()) continue;
+
+        String line = SerialSTM.readStringUntil('\n');
+        line.trim();
+
+        if (line == "LOGS_END") break;
+        if (line.length() == 0)  continue;
+
+        // Parse "timestamp_ms,tier,event_code,data"
+        int c1 = line.indexOf(',');
+        int c2 = line.indexOf(',', c1 + 1);
+        int c3 = line.indexOf(',', c2 + 1);
+        if (c1 < 0 || c2 < 0 || c3 < 0) {
+            Serial.printf("[BRIDGE] Malformed log line: '%s'\n", line.c_str());
+            continue;
+        }
+
+        if (!first) body += ",";
+        body += "{\"ts\":"    + line.substring(0, c1) +
+                ",\"tier\":"  + line.substring(c1 + 1, c2) +
+                ",\"event\":" + line.substring(c2 + 1, c3) +
+                ",\"data\":"  + line.substring(c3 + 1) + "}";
+        first = false;
+    }
+    body += "]";
+
+    if (first) {
+        Serial.println("[BRIDGE] Log upload: no events");
+        return;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[BRIDGE] Log upload: WiFi not connected");
+        return;
+    }
+
+    HTTPClient http;
+    http.begin(PI_LOG_URL);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.POST(body);
+    Serial.printf("[BRIDGE] Log upload: HTTP %d  (%d bytes)\n", code, body.length());
+    http.end();
 }

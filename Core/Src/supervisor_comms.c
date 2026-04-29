@@ -7,6 +7,7 @@
 #include "usart.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 #define START_BYTE 0xAA
 #define END_BYTE   0x55
@@ -28,6 +29,28 @@ static uint8_t rx_buffer[256];
 
 static uint32_t last_heartbeat = 0;
 static bool connected = false;  // Track Pi connectivity
+
+static void UploadLogs_UART1(void)
+{
+    static LogEvent_t drain_buf[LOG_MAX_DRAIN];
+    uint16_t count = Logger_Drain(drain_buf, LOG_MAX_DRAIN);
+    if (count == 0) return;
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)"UPLOAD_LOGS\r\n", 13, 100);
+
+    char line[48];
+    for (uint16_t i = 0; i < count; i++) {
+        int len = snprintf(line, sizeof(line), "%lu,%d,%u,%lu\r\n",
+                           (unsigned long)drain_buf[i].timestamp_ms,
+                           (int)drain_buf[i].tier,
+                           drain_buf[i].event_code,
+                           (unsigned long)drain_buf[i].data);
+        HAL_UART_Transmit(&huart1, (uint8_t*)line, (uint16_t)len, 50);
+    }
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)"LOGS_END\r\n", 10, 100);
+}
+
 
 void SupervisorComms_Init(void) {
     // Optional: ESP reset pin if available
@@ -130,6 +153,7 @@ void SupervisorComms_Task(void)
                         memcpy(steps, &capture_buffer[2 + META_SIZE], rx_len);
                         SequenceStorage_Save(steps, expected_steps);
                         Logger_Log(LOG_TIER_B, EVENT_SEQUENCE_RECEIVED, expected_steps);
+                        UploadLogs_UART1();  // ship buffered logs to Pi before idling
 
                         // LCD mock — replace with actual LCD driver calls when hardware is ready
                         printf("--- SEQUENCE LOADED ---\r\n");

@@ -46,6 +46,22 @@ bool Logger_A1_Overflowed(void) {
     return a1_overflow;
 }
 
+uint16_t Logger_Drain(LogEvent_t *out_buf, uint16_t max_count) {
+    uint16_t count = 0;
+
+    while (a1_count > 0 && count < max_count) {
+        out_buf[count++] = a1_buffer[a1_tail];
+        a1_tail = (a1_tail + 1) % LOG_A1_BUFFER_SIZE;
+        a1_count--;
+    }
+    while (gen_count > 0 && count < max_count) {
+        out_buf[count++] = gen_buffer[gen_tail];
+        gen_tail = (gen_tail + 1) % LOG_GENERAL_BUFFER_SIZE;
+        gen_count--;
+    }
+    return count;
+}
+
 static const char* TierToString(LogTier_t tier)
 {
     switch (tier) {

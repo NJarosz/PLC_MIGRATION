@@ -6,6 +6,7 @@ Endpoints:
     GET  /health                         - liveness check
     GET  /deployments/<plc_id>           - serve active compiled binary for a PLC
     POST /logs/<plc_id>                  - receive a JSON log batch from a PLC
+    GET  /logs/<plc_id>?date=&limit=     - query stored logs (date: YYYY-MM-DD, limit: int)
     GET  /sequences                      - list compiled .bin files
 """
 
@@ -25,7 +26,7 @@ app = Flask(__name__)
 SERVER_ROOT  = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 REGISTRY_DIR = os.path.join(SERVER_ROOT, "plc_registry")
 COMPILED_DIR = os.path.join(SERVER_ROOT, "sequences", "compiled")
-LOGS_RAW_DIR = os.path.join(SERVER_ROOT, "logs", "raw")
+LOGS_DIR     = os.path.join(SERVER_ROOT, "logs")
 
 
 def load_registry(plc_id: str) -> dict | None:
@@ -81,23 +82,42 @@ def receive_logs(plc_id: str):
         abort(404, description=f"Unknown PLC: {plc_id}")
 
     events = request.get_json(force=True, silent=True)
-    if events is None:
+    if not isinstance(events, list):
         abort(400, description="Request body must be a JSON array of log events")
 
-    os.makedirs(LOGS_RAW_DIR, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_file  = os.path.join(LOGS_RAW_DIR, f"{plc_id}_{timestamp}.json")
+    plc_log_dir = os.path.join(LOGS_DIR, plc_id)
+    os.makedirs(plc_log_dir, exist_ok=True)
 
-    with open(log_file, "w") as f:
-        json.dump({
-            "plc_id":      plc_id,
-            "received_at": timestamp,
-            "events":      events,
-        }, f, indent=2)
+    today        = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    received_at  = datetime.now(timezone.utc).isoformat()
+    log_file     = os.path.join(plc_log_dir, f"{today}.jsonl")
 
-    count = len(events) if isinstance(events, list) else 1
-    print(f"[Pi] {count} log event(s) from {plc_id} → {log_file}")
-    return jsonify({"status": "ok", "events_received": count})
+    with open(log_file, "a") as f:
+        for event in events:
+            event["received_at"] = received_at
+            f.write(json.dumps(event) + "\n")
+
+    print(f"[Pi] {len(events)} log event(s) from {plc_id} → {log_file}")
+    return jsonify({"status": "ok", "events_received": len(events)})
+
+
+@app.route("/logs/<plc_id>", methods=["GET"])
+def get_logs(plc_id: str):
+    date  = request.args.get("date",  datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    limit = int(request.args.get("limit", 100))
+
+    log_file = os.path.join(LOGS_DIR, plc_id, f"{date}.jsonl")
+    if not os.path.exists(log_file):
+        return jsonify([])
+
+    events = []
+    with open(log_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+
+    return jsonify(events[-limit:])
 
 
 # ---------------------------------------------------------------------------
