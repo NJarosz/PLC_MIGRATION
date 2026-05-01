@@ -108,6 +108,13 @@ int main(void)
   Outputs_Init();
   Safety_Init();
   Logger_Init();
+
+  // Detect and log watchdog reset — must happen right after Logger_Init so the event is captured
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) {
+      Logger_Log(LOG_TIER_A1, EVENT_WATCHDOG_RESET, 0);
+  }
+  __HAL_RCC_CLEAR_RESET_FLAGS();  // clear all reset source flags for next boot
+
   StateMachine_Init();
   SequenceEngine_Init();
   SequenceStorage_Load();  // Load any persisted sequence

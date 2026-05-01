@@ -1,7 +1,9 @@
 #include "sequence_engine.h"
 #include "main.h"
-#include "state_machine.h"  // For System_t and system_state
-#include "outputs.h"        // For Outputs_t and outputs
+#include "state_machine.h"      // For System_t and system_state
+#include "outputs.h"            // For Outputs_t and outputs
+#include "logger.h"
+#include "supervisor_comms.h"   // For SupervisorComms_RequestUpload
 
 
 static SequenceStep_t sequence_table[MAX_SEQUENCE_STEPS];
@@ -46,10 +48,11 @@ void SequenceEngine_Update(void)
 
     if (system_state.current_step >= sequence_length) {
         system_state.sequence_active = false;
-        // Optional: force all requested relays off here if you want immediate cleanup
         for (int i = 0; i < NUM_RELAYS; i++) {
             outputs.relay_requested[i] = false;
         }
+        Logger_Log(LOG_TIER_A3, EVENT_SEQUENCE_COMPLETE, sequence_length);
+        SupervisorComms_RequestUpload();
         return;
     }
 

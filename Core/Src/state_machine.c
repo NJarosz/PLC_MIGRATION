@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "sequence_engine.h"
 #include "safety.h"
+#include "supervisor_comms.h"
 
 
 System_t system_state;
@@ -19,6 +20,12 @@ void StateMachine_Init(void) {
 
 void StateMachine_Update(bool safety_ok) {
     uint32_t now = HAL_GetTick();
+
+    // A1 buffer overflow is a hard fault — machine must halt until operator reset
+    if (Logger_A1_Overflowed() && system_state.state != STATE_FAULT) {
+        Logger_Log(LOG_TIER_B, EVENT_A1_OVERFLOW, 0);  // LOG_TIER_B: A1 is full, use general buffer
+        system_state.fault_request = true;
+    }
 
     if (system_state.fault_request) {
         system_state.state = STATE_FAULT;
@@ -60,6 +67,7 @@ void StateMachine_Update(bool safety_ok) {
             // Arm on RFID rising edge
             if (inputs.rfid_rising_edge) {
                 Logger_Log(LOG_TIER_A2, EVENT_LOGIN, system_state.state);
+                SupervisorComms_RequestUpload();
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
             }
@@ -85,6 +93,7 @@ void StateMachine_Update(bool safety_ok) {
             // Logout on RFID rising edge
             if (inputs.rfid_rising_edge) {
                 Logger_Log(LOG_TIER_A2, EVENT_LOGOUT, system_state.state);
+                SupervisorComms_RequestUpload();
                 system_state.state = STATE_IDLE;
                 system_state.state_entry_time = now;
             }
@@ -111,10 +120,10 @@ void StateMachine_Update(bool safety_ok) {
             bool estop_released = !inputs.estop;  // Assuming active-low; adjust if active-high
 
             if (reset_pressed && estop_released) {
-                printf("FAULT RESET (ESTOP CLEARED)\r\n");  // Debug; remove in production
-                Logger_Log(LOG_TIER_A1, EVENT_SAFETY_RESET, 0);  // New event code—add to logger.h enum
+                Logger_Log(LOG_TIER_A1, EVENT_SAFETY_RESET, 0);
                 FAULT_LATCHED = false;
                 ESTOP_ASSERTED = false;
+                Logger_ClearA1Overflow();  // allow A1 overflow check to re-arm after reset
                 system_state.state = STATE_IDLE;
                 system_state.state_entry_time = now;
             }

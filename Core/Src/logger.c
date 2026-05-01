@@ -46,6 +46,14 @@ bool Logger_A1_Overflowed(void) {
     return a1_overflow;
 }
 
+uint16_t Logger_GetCount(void) {
+    return a1_count + gen_count;
+}
+
+void Logger_ClearA1Overflow(void) {
+    a1_overflow = false;
+}
+
 uint16_t Logger_Drain(LogEvent_t *out_buf, uint16_t max_count) {
     uint16_t count = 0;
 

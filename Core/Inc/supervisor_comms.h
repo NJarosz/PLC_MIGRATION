@@ -21,4 +21,8 @@ void SupervisorComms_Init(void);
 void SupervisorComms_Task(void);
 bool SupervisorComms_IsConnected(void);
 
+// Request a log upload on the next SupervisorComms_Task tick.
+// Safe to call from state_machine.c, sequence_engine.c, etc.
+void SupervisorComms_RequestUpload(void);
+
 #endif

@@ -35,9 +35,12 @@ typedef enum {
     EVENT_COMMS_UART_ERROR    = 312,  // HAL_UART_Receive returned HAL_ERROR; data = UART SR
     EVENT_COMMS_HASH_MISMATCH = 313,  // received hash did not match computed hash; frame rejected
     EVENT_COMMS_META_INVALID  = 314,  // metadata step_count disagrees with blob length; data = step_count from meta
+    EVENT_WATCHDOG_RESET      = 400,  // MCU was reset by IWDG; logged on next boot
+    EVENT_A1_OVERFLOW         = 401,  // A1 buffer filled; FAULT triggered
     EVENT_LOGIN = 600,
-	EVENT_SEQUENCE_START = 601,
+    EVENT_SEQUENCE_START = 601,
     EVENT_LOGOUT = 602,
+    EVENT_SEQUENCE_COMPLETE = 603,  // sequence engine finished all steps; data = step count
     EVENT_DEBUG_STEP_TIMING = 700
 
 } EventCode_t;
@@ -53,5 +56,11 @@ void Logger_Process(void);
 
 // Drain all buffered events into caller-supplied array. Returns count. Clears buffers.
 uint16_t Logger_Drain(LogEvent_t *out_buf, uint16_t max_count);
+
+// Returns total number of events currently buffered across all tiers.
+uint16_t Logger_GetCount(void);
+
+// Clears the A1 overflow flag (call after fault reset so the check doesn't re-trigger).
+void Logger_ClearA1Overflow(void);
 
 #endif

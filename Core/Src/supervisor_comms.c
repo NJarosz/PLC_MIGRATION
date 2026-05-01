@@ -2,6 +2,8 @@
 #include "main.h"               // for huart1
 #include "sequence_storage.h"
 #include "sequence_engine.h"
+#include "state_machine.h"
+#include "safety.h"
 #include "logger.h"
 #include "sha256.h"
 #include "usart.h"
@@ -28,7 +30,13 @@ static uint8_t rx_idx = 0;
 static uint8_t rx_buffer[256];
 
 static uint32_t last_heartbeat = 0;
-static bool connected = false;  // Track Pi connectivity
+static bool connected = false;
+static char active_seq_name[16] = "none";  // updated on every successful sequence receive
+static volatile bool upload_requested = false;
+
+void SupervisorComms_RequestUpload(void) {
+    upload_requested = true;
+}
 
 static void UploadLogs_UART1(void)
 {
@@ -49,6 +57,24 @@ static void UploadLogs_UART1(void)
     }
 
     HAL_UART_Transmit(&huart1, (uint8_t*)"LOGS_END\r\n", 10, 100);
+}
+
+
+// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>|<log_depth>\r\n
+// State codes match SystemState_t enum: 0=BOOT 1=IDLE 2=ARMED 3=RUNNING 4=FAULT
+static void SendHeartbeat(void)
+{
+    char line[72];
+    uint8_t fault_flag  = (FAULT_LATCHED || system_state.state == STATE_FAULT) ? 1 : 0;
+    uint16_t log_depth  = Logger_GetCount();
+
+    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u|%u\r\n",
+                       (unsigned long)HAL_GetTick(),
+                       (unsigned int)system_state.state,
+                       active_seq_name,
+                       fault_flag,
+                       log_depth);
+    HAL_UART_Transmit(&huart1, (uint8_t*)line, (uint16_t)len, 50);
 }
 
 
@@ -79,6 +105,11 @@ void SupervisorComms_Task(void)
         uint8_t tmp;
         while (HAL_UART_Receive(&huart1, &tmp, 1, 10) == HAL_OK);  // flush junk
         first_run = false;
+    }
+
+    if (upload_requested) {
+        upload_requested = false;
+        UploadLogs_UART1();
     }
 
     uint8_t byte;
@@ -153,6 +184,11 @@ void SupervisorComms_Task(void)
                         memcpy(steps, &capture_buffer[2 + META_SIZE], rx_len);
                         SequenceStorage_Save(steps, expected_steps);
                         Logger_Log(LOG_TIER_B, EVENT_SEQUENCE_RECEIVED, expected_steps);
+
+                        // Track active sequence name for heartbeat reporting
+                        memcpy(active_seq_name, meta.seq_name, sizeof(active_seq_name) - 1);
+                        active_seq_name[sizeof(active_seq_name) - 1] = '\0';
+
                         UploadLogs_UART1();  // ship buffered logs to Pi before idling
 
                         // LCD mock — replace with actual LCD driver calls when hardware is ready
@@ -186,14 +222,10 @@ void SupervisorComms_Task(void)
         rx_state = RX_WAIT_START;
     }
 
-//    // Heartbeat TX (non-blocking)
-//    uint32_t now = HAL_GetTick();
-//    if (now - last_heartbeat >= HEARTBEAT_INTERVAL_MS) {
-//        uint8_t hb[4] = {0xBB, 0x01, 0x00, 0xEE};  // Simple placeholder frame; expand with tick/status
-//        HAL_UART_Transmit(&huart1, hb, sizeof(hb), 10);  // Short timeout
-//        last_heartbeat = now;
-//        // Future: If no ACK in N cycles, set connected = false; log Tier B
-//    }
-
-    // Future: Process incoming ACKs/logs in RX state machine
+    // Heartbeat TX — every 5s, non-blocking
+    uint32_t now = HAL_GetTick();
+    if (now - last_heartbeat >= HEARTBEAT_INTERVAL_MS) {
+        SendHeartbeat();
+        last_heartbeat = now;
+    }
 }

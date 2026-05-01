@@ -24,6 +24,7 @@ HardwareSerial SerialSTM(1);  // UART1
 // --- forward declarations ---
 bool fetchAndSend();
 void uploadLogs();
+void forwardHeartbeat(const String& line);
 
 void setup() {
     Serial.begin(115200);
@@ -59,6 +60,8 @@ void loop() {
         } else if (cmd == "UPLOAD_LOGS") {
             Serial.println("[BRIDGE] Receiving log upload from STM32...");
             uploadLogs();
+        } else if (cmd.startsWith("HEARTBEAT")) {
+            forwardHeartbeat(cmd);
         }
     }
     delay(10);
@@ -135,6 +138,49 @@ bool fetchAndSend() {
                   blobLen, META_SIZE, blobLen);
     return true;
 }
+
+void forwardHeartbeat(const String& line) {
+    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault|log_depth"
+    // Field indices after splitting on '|': 0=HEARTBEAT 1=tick 2=state 3=seq 4=fault 5=log_depth
+    int p1 = line.indexOf('|');
+    int p2 = line.indexOf('|', p1 + 1);
+    int p3 = line.indexOf('|', p2 + 1);
+    int p4 = line.indexOf('|', p3 + 1);
+    int p5 = line.indexOf('|', p4 + 1);
+
+    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) {
+        Serial.printf("[BRIDGE] Malformed heartbeat: '%s'\n", line.c_str());
+        return;
+    }
+
+    String tick      = line.substring(p1 + 1, p2);
+    String state     = line.substring(p2 + 1, p3);
+    String seqName   = line.substring(p3 + 1, p4);
+    String fault     = line.substring(p4 + 1, p5);
+    String logDepth  = line.substring(p5 + 1);
+
+    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s log=%s\n",
+                  tick.c_str(), state.c_str(), seqName.c_str(),
+                  fault.c_str(), logDepth.c_str());
+
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    String body = "{\"tick\":"      + tick    +
+                  ",\"state\":"     + state   +
+                  ",\"seq\":\""     + seqName + "\"" +
+                  ",\"fault\":"     + fault   +
+                  ",\"log_depth\":" + logDepth + "}";
+
+    HTTPClient http;
+    http.begin(PI_HEARTBEAT_URL);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.POST(body);
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("[BRIDGE] Heartbeat POST failed: HTTP %d\n", code);
+    }
+    http.end();
+}
+
 
 void uploadLogs() {
     String body = "[";
