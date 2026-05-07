@@ -237,7 +237,11 @@ _STALE_THRESHOLD_S = 30  # mark offline if no heartbeat for this many seconds
 def receive_heartbeat(plc_id: str):
     registry = load_registry(plc_id)
     if registry is None:
-        abort(404, description=f"Unknown PLC: {plc_id}")
+        # Auto-register on first contact (or after registry loss).
+        # Deployment info (active_sequence, active_bin) will be absent until
+        # a sequence is deployed via /api/sequences/deploy.
+        os.makedirs(REGISTRY_DIR, exist_ok=True)
+        registry = {"plc_id": plc_id}
 
     body    = request.get_json(force=True, silent=True) or {}
     now     = datetime.now(timezone.utc)
@@ -278,7 +282,7 @@ def receive_heartbeat(plc_id: str):
 def receive_logs(plc_id: str):
     registry = load_registry(plc_id)
     if registry is None:
-        abort(404, description=f"Unknown PLC: {plc_id}")
+        registry = {}
 
     events = request.get_json(force=True, silent=True)
     if not isinstance(events, list):
@@ -582,7 +586,8 @@ def api_deploy():
 
     registry = load_registry(plc_id)
     if registry is None:
-        abort(404, description=f"Unknown PLC: {plc_id}")
+        os.makedirs(REGISTRY_DIR, exist_ok=True)
+        registry = {"plc_id": plc_id}
 
     registry["active_sequence"] = seq_id
     registry["active_version"]  = version
