@@ -22,9 +22,11 @@ rsync -av --progress \
     --exclude '.env' \
     --exclude 'logs/' \
     --exclude 'sequences/compiled/' \
+    --exclude 'plc_registry/' \
     --exclude 'venv/' \
     "${SCRIPT_DIR}/" \
     "${PI_USER}@${PI_HOST}:${PI_DIR}/"
 
-echo "[deploy] Done. To restart the server on the Pi:"
-echo "         ssh ${PI_USER}@${PI_HOST} 'sudo systemctl restart plc-server'"
+echo "[deploy] Restarting plc-server on Pi..."
+ssh "${PI_USER}@${PI_HOST}" 'sudo systemctl restart plc-server && echo "[deploy] Service restarted OK"' \
+    || echo "[deploy] Warning: could not restart — run setup.sh on the Pi first to install the service"

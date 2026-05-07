@@ -1,65 +1,90 @@
-#!/bin/bash
-# setup.sh — Bootstrap the PLC server directory structure on the Pi.
+#!/usr/bin/env bash
+# setup.sh — Bootstrap the PLC server on the Raspberry Pi.
 #
-# Run this from the pi/ directory of the cloned repo:
-#   cd PLC_MIGRATION/pi && bash setup.sh
-# Or specify a custom install location:
+# Run once from the pi/ directory after cloning / rsyncing:
+#   cd ~/plc_server && bash setup.sh
+#
+# To install to a custom path:
 #   bash setup.sh /opt/plc_server
-set -e
+set -euo pipefail
 
 INSTALL_DIR="${1:-$HOME/plc_server}"
+SERVICE_NAME="plc-server"
+SERVICE_USER="${SUDO_USER:-$(whoami)}"
 
 echo "=== PLC Server Setup ==="
-echo "Target: $INSTALL_DIR"
+echo "Install dir : $INSTALL_DIR"
+echo "Service user: $SERVICE_USER"
 echo ""
 
-# Create directory tree
-mkdir -p "$INSTALL_DIR"/{api,compiler,sequences/{definitions,compiled},plc_registry,logs/{raw,archive}}
+# ── Directory tree ────────────────────────────────────────────────────────────
+mkdir -p "$INSTALL_DIR"/{api/{templates,static},compiler,sequences/{definitions,compiled},plc_registry,logs}
 
-# Copy scripts
-cp api/app.py                   "$INSTALL_DIR/api/"
-cp compiler/compile_sequence.py "$INSTALL_DIR/compiler/"
-cp sequences/definitions/*      "$INSTALL_DIR/sequences/definitions/"
-cp plc_registry/*.json          "$INSTALL_DIR/plc_registry/"
-cp requirements.txt             "$INSTALL_DIR/"
+# ── Copy server files ─────────────────────────────────────────────────────────
+cp api/app.py                       "$INSTALL_DIR/api/"
+cp api/templates/*.html             "$INSTALL_DIR/api/templates/"
+cp api/static/style.css             "$INSTALL_DIR/api/static/"
+cp compiler/compile_sequence.py     "$INSTALL_DIR/compiler/"
+cp event_codes.py                   "$INSTALL_DIR/"
+cp employees.json                   "$INSTALL_DIR/" 2>/dev/null || true
+cp requirements.txt                 "$INSTALL_DIR/"
 
-# Copy .env if present, otherwise copy the example
+# Copy example sequences (don't overwrite existing definitions)
+for f in sequences/definitions/*.json; do
+    dest="$INSTALL_DIR/sequences/definitions/$(basename "$f")"
+    [ -f "$dest" ] || cp "$f" "$dest"
+done
+
+# .env
 if [ -f .env ]; then
     cp .env "$INSTALL_DIR/.env"
-else
+elif [ ! -f "$INSTALL_DIR/.env" ]; then
     cp .env.example "$INSTALL_DIR/.env"
-    echo "Note: copied .env.example to .env — edit it if needed."
+    echo "Note: copied .env.example → .env — edit it if needed."
 fi
 
-# Create a virtual environment and install dependencies inside it.
-# This avoids the PEP 668 "externally-managed-environment" error on
-# Raspberry Pi OS / Debian Bookworm and later.
-echo "Creating Python virtual environment..."
+# ── Python virtual environment ────────────────────────────────────────────────
+echo "Setting up Python virtual environment..."
 python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
-"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
+"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
+echo "Dependencies installed."
+
+# ── systemd service ───────────────────────────────────────────────────────────
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+echo "Installing systemd service → $SERVICE_FILE"
+sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=PLC Manager Flask Server
+After=network.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/venv/bin/python3 ${INSTALL_DIR}/api/app.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable "$SERVICE_NAME"
+sudo systemctl restart "$SERVICE_NAME"
 
 echo ""
-echo "Done. Directory layout:"
+echo "=== Setup complete ==="
 echo ""
-echo "  $INSTALL_DIR/"
-echo "  ├── venv/                         Python virtual environment"
-echo "  ├── api/app.py                    Flask REST API"
-echo "  ├── compiler/compile_sequence.py  JSON → .bin compiler"
-echo "  ├── sequences/"
-echo "  │   ├── definitions/              JSON sequence manifests (edit these)"
-echo "  │   └── compiled/                 Generated .bin blobs (do not edit)"
-echo "  ├── plc_registry/                 One JSON file per PLC"
-echo "  ├── .env                          Environment config (port, debug, etc.)"
-echo "  └── logs/"
-echo "      ├── raw/                      Raw JSON log uploads from PLCs"
-echo "      └── archive/                  Future: CSV-archived logs"
+echo "Service status:"
+sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
 echo ""
-echo "Workflow:"
-echo "  1. Edit sequences/definitions/example_sequence.json (or create a new one)"
-echo "  2. Compile + deploy:"
-echo "       cd $INSTALL_DIR"
-echo "       venv/bin/python3 compiler/compile_sequence.py sequences/definitions/example_sequence.json --deploy"
-echo "  3. Start API server:"
-echo "       venv/bin/python3 api/app.py"
-echo "  4. Press the button on the STM32 — it will request and receive the sequence."
+echo "Useful commands:"
+echo "  sudo systemctl restart $SERVICE_NAME   # restart after a deploy"
+echo "  sudo systemctl stop    $SERVICE_NAME   # stop the server"
+echo "  journalctl -u $SERVICE_NAME -f         # tail logs"
+echo "  curl http://localhost:5000/health       # quick health check"
