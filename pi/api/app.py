@@ -45,13 +45,21 @@ def load_registry(plc_id: str) -> dict | None:
     path = os.path.join(REGISTRY_DIR, f"{plc_id}.json")
     if not os.path.exists(path):
         return None
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def save_registry(plc_id: str, registry: dict) -> None:
-    with open(os.path.join(REGISTRY_DIR, f"{plc_id}.json"), "w") as f:
+    # Write to a temp file then atomically rename so a power cut never leaves
+    # the registry blank (open("w") truncates before writing).
+    path     = os.path.join(REGISTRY_DIR, f"{plc_id}.json")
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
         json.dump(registry, f, indent=2)
+    os.replace(tmp_path, path)
 
 
 def find_definition(seq_name: str) -> dict:
