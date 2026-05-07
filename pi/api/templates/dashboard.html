@@ -19,7 +19,9 @@
                 <div class="plc-card-header">
                     <span class="status-dot" :class="plc.status"></span>
                     <h2 x-text="plc.plc_id"></h2>
-                    <span class="state-badge" :class="'state-' + plc.state" x-text="plc.state || '—'"></span>
+                    <span class="state-badge"
+                          :class="plc.status === 'online' ? 'state-' + plc.state : 'state-STALE'"
+                          x-text="plc.status === 'online' ? (plc.state || '—') : 'DISCONNECTED'"></span>
                     <button class="btn-icon" title="Edit config" style="font-size:14px;margin-left:auto"
                             @click="startEdit(plc)">✎</button>
                 </div>
