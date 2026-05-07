@@ -64,7 +64,7 @@
                     <input type="number" x-model.number="version" min="1" style="width:80px" @input="markDirty()">
                 </div>
                 <div class="form-group">
-                    <label>Target PLC</label>
+                    <label>Preview Rules for PLC</label>
                     <select x-model="target_plc" @change="onPlcChange(); markDirty()">
                         <option value="">— None —</option>
                         <template x-for="plc in plcs" :key="plc.plc_id">

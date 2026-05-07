@@ -3,7 +3,6 @@
     "version": 2,
     "author": "nicholas",
     "description": "Dev test — individual relay control example",
-    "target_plc": "PLC01",
     "steps": [
         { "relays": [1],    "duration_ms": 2000, "note": "Relay 1 ON" },
         { "relays": [1, 2], "duration_ms": 500,  "note": "Relay 2 joins — both ON" },

@@ -57,7 +57,7 @@ def relays_to_mask(relays: list, step_index: int) -> int:
 
 
 def validate(definition: dict):
-    for field in ("sequence_id", "version", "target_plc", "steps"):
+    for field in ("sequence_id", "version", "steps"):
         if field not in definition:
             raise ValueError(f"Missing required field: '{field}'")
 

@@ -68,12 +68,47 @@
                     </div>
                 </template>
 
+                <!-- Sequence deploy row -->
+                <div class="plc-deploy-row" x-show="!editMode[plc.plc_id]">
+                    <select x-model="seqSelect[plc.plc_id]">
+                        <option value="">— Deploy sequence —</option>
+                        <template x-for="s in compiledSequences" :key="s.sequence_id">
+                            <option :value="s.sequence_id"
+                                    x-text="s.sequence_id + ' v' + s.version"></option>
+                        </template>
+                    </select>
+                    <button class="btn btn-sm btn-success"
+                            :disabled="!seqSelect[plc.plc_id]"
+                            @click="deployToPlc(plc.plc_id, seqSelect[plc.plc_id])">
+                        Deploy
+                    </button>
+                </div>
+
                 <div class="plc-card-footer" x-show="!editMode[plc.plc_id]">
                     <span class="fault-badge" x-show="plc.fault">FAULT</span>
                     <span class="text-muted" style="font-size:12px" x-show="plc.description" x-text="plc.description"></span>
                 </div>
             </div>
         </template>
+    </div><!-- /plc-grid -->
+
+    <!-- Deploy reminder modal -->
+    <div class="modal-backdrop" x-show="deployReminder" style="display:none" @click.self="deployReminder = false">
+        <div class="modal">
+            <h3>Sequence queued on Pi ✓</h3>
+            <p>
+                <strong x-text="deployReminderSeq"></strong> is now set as the active sequence for
+                <strong x-text="deployReminderPlc"></strong> on the server.
+            </p>
+            <div class="modal-warn">
+                The PLC won't load the new sequence until it triggers a pull from the server —
+                typically on the next power cycle or when a sequence-load is initiated locally on the device.
+                The dashboard will show the updated sequence name once the PLC pulls and sends a heartbeat.
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" @click="deployReminder = false">Got it</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -81,14 +116,28 @@
 function dashboard() {
     return {
         plcs:      [],
+        sequences: [],
         connected: false,
         editMode:  {},
         editBuf:   {},
+        seqSelect: {},
+
+        deployReminder:    false,
+        deployReminderSeq: '',
+        deployReminderPlc: '',
+
+        get compiledSequences() {
+            return this.sequences.filter(s => s.compiled);
+        },
 
         init() {
             fetch('/api/plcs')
                 .then(r => r.json())
                 .then(d => { this.plcs = d; });
+
+            fetch('/api/sequences/definitions')
+                .then(r => r.json())
+                .then(d => { this.sequences = d; });
 
             const es = new EventSource('/events');
             es.onmessage = e => {
@@ -120,6 +169,21 @@ function dashboard() {
             });
             if (r.ok) {
                 this.editMode[plcId] = false;
+            }
+        },
+
+        async deployToPlc(plcId, seqId) {
+            if (!seqId) return;
+            const r = await fetch('/api/sequences/deploy', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ sequence_id: seqId, plc_id: plcId }),
+            });
+            if (r.ok) {
+                this.deployReminderSeq = seqId;
+                this.deployReminderPlc = plcId;
+                this.deployReminder    = true;
+                this.seqSelect[plcId]  = '';
             }
         },
 
