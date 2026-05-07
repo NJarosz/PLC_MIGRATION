@@ -62,21 +62,32 @@ def save_registry(plc_id: str, registry: dict) -> None:
     os.replace(tmp_path, path)
 
 
-def find_definition(seq_name: str) -> dict:
-    """Return the definition JSON whose sequence_id matches seq_name, or {}."""
-    if not os.path.exists(DEFINITIONS_DIR):
-        return {}
-    for fname in os.listdir(DEFINITIONS_DIR):
-        if not fname.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(DEFINITIONS_DIR, fname)) as f:
-                d = json.load(f)
-            if d.get("sequence_id") == seq_name:
-                return d
-        except (json.JSONDecodeError, OSError):
-            continue
-    return {}
+def find_definition(seq_id: str) -> tuple:
+    """Return (definition_dict, file_path) for the given sequence_id, or ({}, None).
+
+    Checks {seq_id}.json first (fast path), then scans all files so that
+    sequences whose filename doesn't match their sequence_id still work.
+    """
+    if os.path.exists(DEFINITIONS_DIR):
+        direct = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
+        if os.path.exists(direct):
+            try:
+                with open(direct) as f:
+                    return json.load(f), direct
+            except (json.JSONDecodeError, OSError):
+                pass
+        for fname in sorted(os.listdir(DEFINITIONS_DIR)):
+            if not fname.endswith(".json"):
+                continue
+            path = os.path.join(DEFINITIONS_DIR, fname)
+            try:
+                with open(path) as f:
+                    d = json.load(f)
+                if d.get("sequence_id") == seq_id:
+                    return d, path
+            except (json.JSONDecodeError, OSError):
+                continue
+    return {}, None
 
 
 def load_employees() -> dict:
@@ -257,7 +268,7 @@ def receive_heartbeat(plc_id: str):
 
     # When the active sequence changes, look up and cache part/machine from its definition
     if seq_name and seq_name != registry.get("plc_seq"):
-        defn = find_definition(seq_name)
+        defn, _ = find_definition(seq_name)
         registry["plc_part_num"]   = defn.get("part_num", "")
         registry["plc_machine_id"] = defn.get("machine_id", "")
 
@@ -537,11 +548,10 @@ def api_save_definition():
 
 @app.route("/api/sequences/definitions/<seq_id>", methods=["GET"])
 def api_get_definition(seq_id: str):
-    path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
-    if not os.path.exists(path):
+    defn, _ = find_definition(seq_id)
+    if not defn:
         abort(404, description=f"Definition not found: {seq_id}")
-    with open(path) as f:
-        return jsonify(json.load(f))
+    return jsonify(defn)
 
 
 @app.route("/api/sequences/compile", methods=["POST"])
@@ -551,13 +561,11 @@ def api_compile():
     if not seq_id:
         abort(400, description="sequence_id required")
 
-    def_path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
-    if not os.path.exists(def_path):
+    definition, _ = find_definition(seq_id)
+    if not definition:
         abort(404, description=f"Definition not found: {seq_id}")
 
     try:
-        with open(def_path) as f:
-            definition = json.load(f)
         out_path, _ = compile_from_dict(definition, COMPILED_DIR)
         return jsonify({"status": "ok", "output_file": os.path.basename(out_path)})
     except (ValueError, KeyError) as e:
@@ -572,12 +580,9 @@ def api_deploy():
     if not seq_id or not plc_id:
         abort(400, description="sequence_id and plc_id required")
 
-    def_path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
-    if not os.path.exists(def_path):
+    definition, _ = find_definition(seq_id)
+    if not definition:
         abort(404, description=f"Definition not found: {seq_id}")
-
-    with open(def_path) as f:
-        definition = json.load(f)
 
     version  = definition.get("version", 1)
     bin_path = os.path.join(COMPILED_DIR, f"{seq_id}_v{version}.bin")
