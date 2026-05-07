@@ -65,24 +65,26 @@
                             <button class="btn btn-sm btn-primary" @click="saveConfig(plc.plc_id)">Save</button>
                             <button class="btn btn-sm btn-secondary" @click="editMode[plc.plc_id] = false">Cancel</button>
                         </div>
+
+                        <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+                            <div class="form-group" style="margin-bottom:8px">
+                                <label>Deploy Sequence</label>
+                                <select x-model="seqSelect[plc.plc_id]">
+                                    <option value="">— Select sequence —</option>
+                                    <template x-for="s in compiledSequences" :key="s.sequence_id">
+                                        <option :value="s.sequence_id"
+                                                x-text="s.sequence_id + ' v' + s.version"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <button class="btn btn-sm btn-success"
+                                    :disabled="!seqSelect[plc.plc_id]"
+                                    @click="deployToPlc(plc.plc_id, seqSelect[plc.plc_id])">
+                                Deploy
+                            </button>
+                        </div>
                     </div>
                 </template>
-
-                <!-- Sequence deploy row -->
-                <div class="plc-deploy-row" x-show="!editMode[plc.plc_id]">
-                    <select x-model="seqSelect[plc.plc_id]">
-                        <option value="">— Deploy sequence —</option>
-                        <template x-for="s in compiledSequences" :key="s.sequence_id">
-                            <option :value="s.sequence_id"
-                                    x-text="s.sequence_id + ' v' + s.version"></option>
-                        </template>
-                    </select>
-                    <button class="btn btn-sm btn-success"
-                            :disabled="!seqSelect[plc.plc_id]"
-                            @click="deployToPlc(plc.plc_id, seqSelect[plc.plc_id])">
-                        Deploy
-                    </button>
-                </div>
 
                 <div class="plc-card-footer" x-show="!editMode[plc.plc_id]">
                     <span class="fault-badge" x-show="plc.fault">FAULT</span>

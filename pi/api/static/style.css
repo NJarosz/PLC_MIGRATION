@@ -463,17 +463,6 @@ input:focus, select:focus, textarea:focus {
     flex-wrap: wrap;
 }
 
-/* ── PLC card deploy row ── */
-.plc-deploy-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
-}
-.plc-deploy-row select { flex: 1; font-size: 12px; padding: 5px 8px; }
-
 /* ── PLC card edit form ── */
 .plc-edit-form {
     border-top: 1px solid var(--border);

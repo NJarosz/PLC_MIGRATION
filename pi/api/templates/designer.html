@@ -6,7 +6,8 @@
 {% endblock %}
 
 {% block content %}
-<div x-data="designer()" x-init="init()" class="designer-layout">
+<div x-data="designer()" x-init="init()">
+<div class="designer-layout">
 
     <!-- ── Sidebar: saved sequences ── -->
     <aside class="card designer-sidebar">
@@ -199,7 +200,8 @@
     </div><!-- /designer-main -->
 </div><!-- /designer-layout -->
 
-<!-- Deploy reminder modal -->
+<!-- Deploy reminder modal — must be inside the x-data scope -->
+
 <div class="modal-backdrop" x-show="deployReminder" style="display:none" @click.self="deployReminder = false">
     <div class="modal">
         <h3>Sequence queued on Pi ✓</h3>
@@ -216,7 +218,8 @@
             <button class="btn btn-primary" @click="deployReminder = false">Got it</button>
         </div>
     </div>
-</div>
+</div><!-- /modal-backdrop -->
+</div><!-- /x-data -->
 
 <script>
 let _stepCounter = 0;
