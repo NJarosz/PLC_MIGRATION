@@ -1,0 +1,5 @@
+{
+  "1001": {"name": "Alice Johnson",  "role": "Operator"},
+  "1002": {"name": "Bob Smith",      "role": "Operator"},
+  "1003": {"name": "Charlie Davis",  "role": "Supervisor"}
+}

@@ -1,5 +1,8 @@
 #include "logger.h"
 #include "main.h"
+#include <stdio.h>
+
+static const char* TierToString(LogTier_t tier);
 
 static LogEvent_t a1_buffer[LOG_A1_BUFFER_SIZE];
 static uint16_t a1_head = 0, a1_tail = 0, a1_count = 0;
@@ -20,6 +23,14 @@ void Logger_Log(LogTier_t tier, uint16_t event_code, uint32_t data) {
     event.tier = tier;
     event.event_code = event_code;
     event.data = data;
+
+#if ENABLE_DEBUG_LOGS
+    printf("[%s] %lu | %u | %lu\r\n",
+           TierToString(tier),
+           (unsigned long)event.timestamp_ms,
+           (unsigned int)event_code,
+           (unsigned long)data);
+#endif
 
     if (tier == LOG_TIER_A1) {
         if (a1_count >= LOG_A1_BUFFER_SIZE) {
@@ -82,28 +93,3 @@ static const char* TierToString(LogTier_t tier)
     }
 }
 
-void Logger_Process(void) {
-    // Simulate upload by printing and clearing
-
-    while (a1_count > 0) {
-        LogEvent_t e = a1_buffer[a1_tail];
-        a1_tail = (a1_tail + 1) % LOG_A1_BUFFER_SIZE;
-        a1_count--;
-
-        printf("[A1] %lu | %u | %lu\r\n",
-               e.timestamp_ms, e.event_code, e.data);
-    }
-
-    while (gen_count > 0) {
-        LogEvent_t e = gen_buffer[gen_tail];
-        gen_tail = (gen_tail + 1) % LOG_GENERAL_BUFFER_SIZE;
-        gen_count--;
-
-
-        printf("[%s] %lu | %u | %lu\r\n",
-               TierToString(e.tier),
-               e.timestamp_ms,
-               e.event_code,
-               e.data);
-    }
-}

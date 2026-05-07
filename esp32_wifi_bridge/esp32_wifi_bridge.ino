@@ -25,6 +25,13 @@ HardwareSerial SerialSTM(1);  // UART1
 bool fetchAndSend();
 void uploadLogs();
 void forwardHeartbeat(const String& line);
+void lookupEmployee(const String& line);
+bool postJson(const String& url, const String& body);
+void flushPendingLogs();
+
+// In-memory buffer for one log batch that failed to POST (e.g. brief WiFi blip).
+// Flushed automatically at the start of the next upload attempt.
+static String pendingLogs = "";
 
 void setup() {
     Serial.begin(115200);
@@ -62,6 +69,8 @@ void loop() {
             uploadLogs();
         } else if (cmd.startsWith("HEARTBEAT")) {
             forwardHeartbeat(cmd);
+        } else if (cmd.startsWith("LOOKUP_EMPLOYEE")) {
+            lookupEmployee(cmd);
         }
     }
     delay(10);
@@ -140,36 +149,32 @@ bool fetchAndSend() {
 }
 
 void forwardHeartbeat(const String& line) {
-    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault|log_depth"
-    // Field indices after splitting on '|': 0=HEARTBEAT 1=tick 2=state 3=seq 4=fault 5=log_depth
+    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault"
+    // Field indices after splitting on '|': 0=HEARTBEAT 1=tick 2=state 3=seq 4=fault
     int p1 = line.indexOf('|');
     int p2 = line.indexOf('|', p1 + 1);
     int p3 = line.indexOf('|', p2 + 1);
     int p4 = line.indexOf('|', p3 + 1);
-    int p5 = line.indexOf('|', p4 + 1);
 
-    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) {
+    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0) {
         Serial.printf("[BRIDGE] Malformed heartbeat: '%s'\n", line.c_str());
         return;
     }
 
-    String tick      = line.substring(p1 + 1, p2);
-    String state     = line.substring(p2 + 1, p3);
-    String seqName   = line.substring(p3 + 1, p4);
-    String fault     = line.substring(p4 + 1, p5);
-    String logDepth  = line.substring(p5 + 1);
+    String tick    = line.substring(p1 + 1, p2);
+    String state   = line.substring(p2 + 1, p3);
+    String seqName = line.substring(p3 + 1, p4);
+    String fault   = line.substring(p4 + 1);
 
-    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s log=%s\n",
-                  tick.c_str(), state.c_str(), seqName.c_str(),
-                  fault.c_str(), logDepth.c_str());
+    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s\n",
+                  tick.c_str(), state.c_str(), seqName.c_str(), fault.c_str());
 
     if (WiFi.status() != WL_CONNECTED) return;
 
-    String body = "{\"tick\":"      + tick    +
-                  ",\"state\":"     + state   +
-                  ",\"seq\":\""     + seqName + "\"" +
-                  ",\"fault\":"     + fault   +
-                  ",\"log_depth\":" + logDepth + "}";
+    String body = "{\"tick\":"  + tick    +
+                  ",\"state\":" + state   +
+                  ",\"seq\":\"" + seqName + "\"" +
+                  ",\"fault\":" + fault   + "}";
 
     HTTPClient http;
     http.begin(PI_HEARTBEAT_URL);
@@ -182,7 +187,33 @@ void forwardHeartbeat(const String& line) {
 }
 
 
+// POST a JSON body to a URL. Returns true on HTTP 200.
+bool postJson(const String& url, const String& body) {
+    HTTPClient http;
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.POST(body);
+    http.end();
+    return code == HTTP_CODE_OK;
+}
+
+// Retry any log batch that failed to POST in a previous cycle.
+void flushPendingLogs() {
+    if (pendingLogs.length() == 0) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    Serial.println("[BRIDGE] Flushing pending logs...");
+    if (postJson(PI_LOG_URL, pendingLogs)) {
+        Serial.println("[BRIDGE] Pending logs flushed OK");
+        pendingLogs = "";
+    } else {
+        Serial.println("[BRIDGE] Pending logs flush failed, will retry");
+    }
+}
+
 void uploadLogs() {
+    flushPendingLogs();  // deliver any previously buffered batch first
+
     String body = "[";
     bool first = true;
     uint32_t deadline = millis() + 5000;  // 5s to receive all lines
@@ -219,15 +250,57 @@ void uploadLogs() {
         return;
     }
 
+    if (WiFi.status() != WL_CONNECTED || !postJson(PI_LOG_URL, body)) {
+        Serial.println("[BRIDGE] Log upload failed — buffering for retry");
+        if (pendingLogs.length() == 0) {
+            pendingLogs = body;  // preserve most-recent failed batch
+        }
+    } else {
+        Serial.printf("[BRIDGE] Log upload OK (%d bytes)\n", body.length());
+    }
+}
+
+void lookupEmployee(const String& line) {
+    // Parse "LOOKUP_EMPLOYEE|1001"
+    int p = line.indexOf('|');
+    if (p < 0) {
+        Serial.println("[BRIDGE] Malformed LOOKUP_EMPLOYEE");
+        return;
+    }
+    String empId = line.substring(p + 1);
+    empId.trim();
+
+    Serial.printf("[BRIDGE] Looking up employee %s\n", empId.c_str());
+
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[BRIDGE] Log upload: WiFi not connected");
+        // No connection — send a fallback so the display still updates
+        SerialSTM.print("EMPLOYEE_NAME|Employee " + empId + "\r\n");
         return;
     }
 
     HTTPClient http;
-    http.begin(PI_LOG_URL);
-    http.addHeader("Content-Type", "application/json");
-    int code = http.POST(body);
-    Serial.printf("[BRIDGE] Log upload: HTTP %d  (%d bytes)\n", code, body.length());
+    http.begin(String(PI_EMPLOYEE_URL) + "/" + empId);
+    int code = http.GET();
+
+    if (code == HTTP_CODE_OK) {
+        String payload = http.getString();
+        // Extract "name" field without pulling in a JSON library
+        int nameStart = payload.indexOf("\"name\":\"");
+        if (nameStart >= 0) {
+            nameStart += 8;
+            int nameEnd = payload.indexOf("\"", nameStart);
+            if (nameEnd >= 0) {
+                String name = payload.substring(nameStart, nameEnd);
+                SerialSTM.print("EMPLOYEE_NAME|" + name + "\r\n");
+                Serial.printf("[BRIDGE] Employee %s → %s\n", empId.c_str(), name.c_str());
+                http.end();
+                return;
+            }
+        }
+    }
+
+    // Lookup failed — fall back to ID so display still shows something
+    Serial.printf("[BRIDGE] Employee lookup failed: HTTP %d\n", code);
+    SerialSTM.print("EMPLOYEE_NAME|Employee " + empId + "\r\n");
     http.end();
 }

@@ -30,11 +30,12 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 app = Flask(__name__)
 
 # All paths are resolved relative to the server root (one level up from api/)
-SERVER_ROOT   = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-REGISTRY_DIR  = os.path.join(SERVER_ROOT, "plc_registry")
-COMPILED_DIR  = os.path.join(SERVER_ROOT, "sequences", "compiled")
+SERVER_ROOT     = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REGISTRY_DIR    = os.path.join(SERVER_ROOT, "plc_registry")
+COMPILED_DIR    = os.path.join(SERVER_ROOT, "sequences", "compiled")
 DEFINITIONS_DIR = os.path.join(SERVER_ROOT, "sequences", "definitions")
-LOGS_DIR      = os.path.join(SERVER_ROOT, "logs")
+LOGS_DIR        = os.path.join(SERVER_ROOT, "logs")
+EMPLOYEES_FILE  = os.path.join(SERVER_ROOT, "employees.json")
 
 
 def load_registry(plc_id: str) -> dict | None:
@@ -65,6 +66,17 @@ def find_definition(seq_name: str) -> dict:
         except (json.JSONDecodeError, OSError):
             continue
     return {}
+
+
+def load_employees() -> dict:
+    """Return the employees dict {str(id): {name, role}} or {} if file is missing."""
+    if not os.path.exists(EMPLOYEES_FILE):
+        return {}
+    try:
+        with open(EMPLOYEES_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def tick_to_wall_clock(tick_ms: int, calibration: dict | None) -> datetime | None:
@@ -118,6 +130,19 @@ def health():
         "timestamp": now.isoformat(),
         "plcs":      plcs,
     })
+
+
+# ---------------------------------------------------------------------------
+# Employees  (ESP32 calls this to resolve a badge number to a display name)
+# ---------------------------------------------------------------------------
+
+@app.route("/employees/<int:employee_id>", methods=["GET"])
+def get_employee(employee_id: int):
+    employees = load_employees()
+    entry = employees.get(str(employee_id))
+    if not entry:
+        abort(404, description=f"Employee {employee_id} not found")
+    return jsonify({"employee_id": employee_id, **entry})
 
 
 # ---------------------------------------------------------------------------
@@ -214,26 +239,44 @@ def receive_logs(plc_id: str):
     calibration_cleared = False
     prod_rows   = []
 
+    employees          = load_employees()
+    current_employee_id = None   # set on LOGIN, cleared on LOGOUT
+
     with open(log_file, "a") as jf:
         for ev in events:
             code = ev.get("event")
             tick = ev.get("ts")
+            data = ev.get("data")
 
             # Reboot event means tick counter reset — calibration is no longer valid
             if code in REBOOT_EVENTS:
                 calibration = None
                 calibration_cleared = True
 
+            # Track current operator from LOGIN / LOGOUT events
+            if code == 600:   # EVENT_LOGIN  — data field is employee_id
+                current_employee_id = str(data) if data is not None else None
+            elif code == 602:  # EVENT_LOGOUT — clear after this row is written
+                pass           # cleared below, after prod_row is appended
+
             wall_clock = tick_to_wall_clock(tick, calibration) if tick is not None else None
             ts_for_csv = wall_clock or received_at
 
+            # Resolve employee name for JSONL enrichment
+            employee_name = None
+            if current_employee_id:
+                emp = employees.get(current_employee_id, {})
+                employee_name = emp.get("name")
+
             annotated = {
-                "tick":       tick,
-                "tier":       TIER_NAMES.get(ev.get("tier"), str(ev.get("tier"))),
-                "event":      code,
-                "event_name": EVENT_NAMES.get(code, f"UNKNOWN_{code}"),
-                "data":       ev.get("data"),
-                "wall_clock": wall_clock.isoformat() if wall_clock else None,
+                "tick":        tick,
+                "tier":        TIER_NAMES.get(ev.get("tier"), str(ev.get("tier"))),
+                "event":       code,
+                "event_name":  EVENT_NAMES.get(code, f"UNKNOWN_{code}"),
+                "data":        data,
+                "employee_id": current_employee_id,
+                "employee":    employee_name,
+                "wall_clock":  wall_clock.isoformat() if wall_clock else None,
                 "received_at": received_at.isoformat(),
             }
             jf.write(json.dumps(annotated) + "\n")
@@ -244,10 +287,13 @@ def receive_logs(plc_id: str):
                     "PLC":       plc_id,
                     "Machine":   machine_id,
                     "Part":      part_num,
-                    "User_ID":   "",
+                    "User_ID":   current_employee_id or "",
                     "Time":      ts_for_csv.strftime("%H:%M:%S"),
                     "Date":      ts_for_csv.strftime("%Y-%m-%d"),
                 })
+
+            if code == 602:   # clear after LOGOUT row is written
+                current_employee_id = None
 
     if prod_rows:
         write_header = not os.path.exists(prod_csv)

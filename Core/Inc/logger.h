@@ -52,7 +52,6 @@ typedef enum {
 void Logger_Init(void);
 void Logger_Log(LogTier_t tier, uint16_t event_code, uint32_t data);
 bool Logger_A1_Overflowed(void);
-void Logger_Process(void);
 
 // Drain all buffered events into caller-supplied array. Returns count. Clears buffers.
 uint16_t Logger_Drain(LogEvent_t *out_buf, uint16_t max_count);

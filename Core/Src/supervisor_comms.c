@@ -38,6 +38,25 @@ void SupervisorComms_RequestUpload(void) {
     upload_requested = true;
 }
 
+void SupervisorComms_SetActiveSeqName(const char *name) {
+    strncpy(active_seq_name, name, sizeof(active_seq_name) - 1);
+    active_seq_name[sizeof(active_seq_name) - 1] = '\0';
+}
+
+void SupervisorComms_LookupEmployee(uint32_t employee_id) {
+    char msg[32];
+    int len = snprintf(msg, sizeof(msg), "LOOKUP_EMPLOYEE|%lu\r\n", (unsigned long)employee_id);
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, (uint16_t)len, 50);
+}
+
+static void HandleIncomingLine(const char *line) {
+    if (strncmp(line, "EMPLOYEE_NAME|", 14) == 0) {
+        const char *name = line + 14;
+        // LCD mock — replace with actual LCD driver call when hardware is wired
+        printf("Operator: %.24s\r\n", name);
+    }
+}
+
 static void UploadLogs_UART1(void)
 {
     static LogEvent_t drain_buf[LOG_MAX_DRAIN];
@@ -60,20 +79,18 @@ static void UploadLogs_UART1(void)
 }
 
 
-// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>|<log_depth>\r\n
+// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>\r\n
 // State codes match SystemState_t enum: 0=BOOT 1=IDLE 2=ARMED 3=RUNNING 4=FAULT
 static void SendHeartbeat(void)
 {
-    char line[72];
-    uint8_t fault_flag  = (FAULT_LATCHED || system_state.state == STATE_FAULT) ? 1 : 0;
-    uint16_t log_depth  = Logger_GetCount();
+    char line[64];
+    uint8_t fault_flag = (FAULT_LATCHED || system_state.state == STATE_FAULT) ? 1 : 0;
 
-    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u|%u\r\n",
+    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u\r\n",
                        (unsigned long)HAL_GetTick(),
                        (unsigned int)system_state.state,
                        active_seq_name,
-                       fault_flag,
-                       log_depth);
+                       fault_flag);
     HAL_UART_Transmit(&huart1, (uint8_t*)line, (uint16_t)len, 50);
 }
 
@@ -117,6 +134,8 @@ void SupervisorComms_Task(void)
     static uint8_t capture_buffer[256];
     static uint8_t capture_idx = 0;
     static bool capturing = false;
+    static char text_line_buf[64];
+    static uint8_t text_line_idx = 0;
 
     HAL_StatusTypeDef rx_status;
 
@@ -125,10 +144,28 @@ void SupervisorComms_Task(void)
         last_rx_time = HAL_GetTick();
 
         if (byte == START_BYTE && !capturing) {
+            text_line_idx = 0;  // discard any partial text line
             capture_idx = 0;
             capturing = true;
             capture_buffer[capture_idx++] = byte;
             rx_state = RX_WAIT_LEN;
+            continue;
+        }
+
+        if (!capturing) {
+            // Buffer text lines (EMPLOYEE_NAME| responses etc.)
+            if (byte == '\n') {
+                if (text_line_idx > 0 && text_line_buf[text_line_idx - 1] == '\r') {
+                    text_line_idx--;
+                }
+                text_line_buf[text_line_idx] = '\0';
+                if (text_line_idx > 0) {
+                    HandleIncomingLine(text_line_buf);
+                }
+                text_line_idx = 0;
+            } else if (text_line_idx < sizeof(text_line_buf) - 1) {
+                text_line_buf[text_line_idx++] = byte;
+            }
             continue;
         }
 
@@ -182,7 +219,7 @@ void SupervisorComms_Task(void)
                     } else {
                         SequenceStep_t steps[MAX_SEQUENCE_STEPS];
                         memcpy(steps, &capture_buffer[2 + META_SIZE], rx_len);
-                        SequenceStorage_Save(steps, expected_steps);
+                        SequenceStorage_Save(steps, expected_steps, &meta);
                         Logger_Log(LOG_TIER_B, EVENT_SEQUENCE_RECEIVED, expected_steps);
 
                         // Track active sequence name for heartbeat reporting

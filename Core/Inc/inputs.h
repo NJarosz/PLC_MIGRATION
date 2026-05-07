@@ -5,13 +5,14 @@
 #include <stdbool.h>
 
 typedef struct {
-    bool estop;
-    bool run;
-    bool run_last;
-    bool run_rising_edge;
-    bool rfid;
-    bool rfid_last;
-    bool rfid_rising_edge;
+    bool     estop;
+    bool     run;
+    bool     run_last;
+    bool     run_rising_edge;
+    bool     rfid;
+    bool     rfid_last;
+    bool     rfid_rising_edge;
+    uint32_t rfid_employee_id;  // employee number read from last tag scan
 } Inputs_t;
 
 void Inputs_Init(void);

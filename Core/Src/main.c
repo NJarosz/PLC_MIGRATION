@@ -27,7 +27,6 @@
 #include <stdbool.h>
 #include "usart.h"
 #include "gpio.h"
-#include "comms.h"
 #include "supervisor_comms.h"
 #include "inputs.h"
 #include "logger.h"
@@ -117,8 +116,8 @@ int main(void)
 
   StateMachine_Init();
   SequenceEngine_Init();
-  SequenceStorage_Load();  // Load any persisted sequence
-  Comms_Init();
+  SequenceStorage_Load();  // Restore last sequence from flash
+  SupervisorComms_Init();
 
   /* USER CODE END 2 */
 
@@ -140,11 +139,7 @@ int main(void)
 
     Outputs_Apply(safety_ok);  // Apply gated outputs
 
-    Logger_Process();  // Process logs (simulate upload)
-
-    Comms_Task();  // Handle communications
-
-    SupervisorComms_Task(); // ESP_32 Comms
+    SupervisorComms_Task();  // ESP32 comms: heartbeat, log upload, sequence receive
 
     HAL_Delay(10);  // Minimal delay for scan rate; adjust for determinism
 

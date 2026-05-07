@@ -25,4 +25,13 @@ bool SupervisorComms_IsConnected(void);
 // Safe to call from state_machine.c, sequence_engine.c, etc.
 void SupervisorComms_RequestUpload(void);
 
+// Override the active sequence name reported in heartbeats.
+// Called by SequenceStorage_Load() to restore state after a reboot.
+void SupervisorComms_SetActiveSeqName(const char *name);
+
+// Ask the ESP32 to resolve an employee number to a display name.
+// The response arrives asynchronously as an EMPLOYEE_NAME| line and is
+// printed via printf (LCD stub) when received.
+void SupervisorComms_LookupEmployee(uint32_t employee_id);
+
 #endif

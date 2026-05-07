@@ -66,7 +66,8 @@ void StateMachine_Update(bool safety_ok) {
 
             // Arm on RFID rising edge
             if (inputs.rfid_rising_edge) {
-                Logger_Log(LOG_TIER_A2, EVENT_LOGIN, system_state.state);
+                Logger_Log(LOG_TIER_A2, EVENT_LOGIN, inputs.rfid_employee_id);
+                SupervisorComms_LookupEmployee(inputs.rfid_employee_id);
                 SupervisorComms_RequestUpload();
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
@@ -92,7 +93,8 @@ void StateMachine_Update(bool safety_ok) {
 
             // Logout on RFID rising edge
             if (inputs.rfid_rising_edge) {
-                Logger_Log(LOG_TIER_A2, EVENT_LOGOUT, system_state.state);
+                Logger_Log(LOG_TIER_A2, EVENT_LOGOUT, inputs.rfid_employee_id);
+                SupervisorComms_LookupEmployee(inputs.rfid_employee_id);
                 SupervisorComms_RequestUpload();
                 system_state.state = STATE_IDLE;
                 system_state.state_entry_time = now;
@@ -121,6 +123,7 @@ void StateMachine_Update(bool safety_ok) {
 
             if (reset_pressed && estop_released) {
                 Logger_Log(LOG_TIER_A1, EVENT_SAFETY_RESET, 0);
+                SupervisorComms_RequestUpload();
                 FAULT_LATCHED = false;
                 ESTOP_ASSERTED = false;
                 Logger_ClearA1Overflow();  // allow A1 overflow check to re-arm after reset

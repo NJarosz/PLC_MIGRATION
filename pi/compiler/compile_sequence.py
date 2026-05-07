@@ -127,11 +127,13 @@ def deploy(definition: dict, bin_path: str, registry_dir: str = "plc_registry"):
 
     os.makedirs(registry_dir, exist_ok=True)
 
+    registry = {"plc_id": plc_id, "description": ""}
     if os.path.exists(registry_path):
-        with open(registry_path) as f:
-            registry = json.load(f)
-    else:
-        registry = {"plc_id": plc_id, "description": ""}
+        try:
+            with open(registry_path) as f:
+                registry = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            print(f"[deploy]  Warning: {registry_path} was unreadable — overwriting")
 
     registry["active_sequence"] = definition["sequence_id"]
     registry["active_version"]  = definition["version"]
