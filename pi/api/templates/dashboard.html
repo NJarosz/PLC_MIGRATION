@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — PLC Manager{% endblock %}
+
+{% block content %}
+<div x-data="dashboard()" x-init="init()">
+
+    <div class="page-header">
+        <h1>Dashboard</h1>
+        <span class="live-badge" x-show="connected">● Live</span>
+    </div>
+
+    <div class="plc-grid">
+        <template x-if="plcs.length === 0">
+            <p class="empty-state">No PLCs registered yet. Connect a PLC to see it here.</p>
+        </template>
+
+        <template x-for="plc in plcs" :key="plc.plc_id">
+            <div class="card plc-card" :class="cardClass(plc)">
+                <div class="plc-card-header">
+                    <span class="status-dot" :class="plc.status"></span>
+                    <h2 x-text="plc.plc_id"></h2>
+                    <span class="state-badge" :class="'state-' + plc.state" x-text="plc.state || '—'"></span>
+                </div>
+
+                <div>
+                    <div class="plc-meta">
+                        <span class="meta-label">Machine</span>
+                        <span x-text="plc.machine_id || '—'"></span>
+                    </div>
+                    <div class="plc-meta">
+                        <span class="meta-label">Part</span>
+                        <span x-text="plc.part_num || '—'"></span>
+                    </div>
+                    <div class="plc-meta">
+                        <span class="meta-label">Sequence</span>
+                        <span x-text="plc.seq || '—'"></span>
+                    </div>
+                    <div class="plc-meta">
+                        <span class="meta-label">Last seen</span>
+                        <span x-text="formatAge(plc.hb_age_s)"></span>
+                    </div>
+                </div>
+
+                <div class="plc-card-footer">
+                    <span class="fault-badge" x-show="plc.fault">FAULT</span>
+                    <span class="text-muted" style="font-size:12px" x-show="plc.description" x-text="plc.description"></span>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>
+
+<script>
+function dashboard() {
+    return {
+        plcs:      [],
+        connected: false,
+
+        init() {
+            fetch('/api/plcs')
+                .then(r => r.json())
+                .then(d => this.plcs = d);
+
+            const es = new EventSource('/events');
+            es.onmessage = e => {
+                this.plcs      = JSON.parse(e.data);
+                this.connected = true;
+            };
+            es.onerror = () => { this.connected = false; };
+        },
+
+        cardClass(plc) {
+            if (plc.fault || plc.state === 'FAULT') return 'fault';
+            if (plc.status === 'online') return 'online';
+            if (plc.status === 'stale')  return 'stale';
+            return 'offline';
+        },
+
+        formatAge(s) {
+            if (s === null || s === undefined) return 'Never';
+            if (s < 60)  return `${s}s ago`;
+            if (s < 3600) return `${Math.round(s / 60)}m ago`;
+            return `${Math.round(s / 3600)}h ago`;
+        },
+    };
+}
+</script>
+{% endblock %}

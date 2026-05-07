@@ -76,10 +76,8 @@ def validate(definition: dict):
             raise ValueError(f"Step {i}: duration_ms must be a non-negative integer, got {duration!r}")
 
 
-def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> tuple[str, dict]:
-    with open(def_path) as f:
-        definition = json.load(f)
-
+def compile_from_dict(definition: dict, output_dir: str = "sequences/compiled") -> tuple[str, dict]:
+    """Compile a definition dict directly — used by the Flask API."""
     validate(definition)
 
     seq_id  = definition["sequence_id"]
@@ -119,6 +117,12 @@ def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> t
     print(f"[compile] {out_path}  ({META_SIZE}B meta + {len(blob)}B payload + 32B SHA-256 = {len(signed)}B total)")
     print(f"[compile] hash: {digest.hex()}")
     return out_path, definition
+
+
+def compile_sequence(def_path: str, output_dir: str = "sequences/compiled") -> tuple[str, dict]:
+    with open(def_path) as f:
+        definition = json.load(f)
+    return compile_from_dict(definition, output_dir)
 
 
 def deploy(definition: dict, bin_path: str, registry_dir: str = "plc_registry"):

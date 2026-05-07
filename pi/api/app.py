@@ -15,14 +15,17 @@ import csv
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, abort, jsonify, request, send_file
+from flask import (Flask, abort, jsonify, redirect, render_template,
+                   request, Response, send_file, stream_with_context, url_for)
 
-# event_codes.py lives one level up from api/
+# event_codes.py and compiler live one level up from api/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from event_codes import EVENT_NAMES, TIER_NAMES, PRODUCTION_EVENT_TYPES, REBOOT_EVENTS
+from compiler.compile_sequence import compile_from_dict
 
 # Load .env from the server root (one level up from api/)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -77,6 +80,51 @@ def load_employees() -> dict:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def _default_rules() -> dict:
+    return {
+        "max_concurrent_outputs": 4,
+        "max_step_duration_ms":   30_000,
+        "max_total_duration_ms":  300_000,
+        "max_steps":              32,
+    }
+
+
+def _plc_status_all() -> list:
+    """Return a list of PLC status dicts, one per registry file."""
+    now = datetime.now(timezone.utc)
+    result = []
+    if not os.path.exists(REGISTRY_DIR):
+        return result
+    for fname in sorted(os.listdir(REGISTRY_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(REGISTRY_DIR, fname)) as f:
+                reg = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        last_hb = reg.get("last_heartbeat")
+        if last_hb:
+            age_s  = (now - datetime.fromisoformat(last_hb)).total_seconds()
+            status = "online" if age_s < _STALE_THRESHOLD_S else "stale"
+        else:
+            age_s  = None
+            status = "never_seen"
+        result.append({
+            "plc_id":     reg.get("plc_id", fname[:-5]),
+            "status":     status,
+            "state":      reg.get("plc_state", "UNKNOWN"),
+            "fault":      reg.get("plc_fault", False),
+            "seq":        reg.get("plc_seq"),
+            "hb_age_s":   round(age_s, 1) if age_s is not None else None,
+            "description": reg.get("description", ""),
+            "part_num":   reg.get("plc_part_num", ""),
+            "machine_id": reg.get("plc_machine_id", ""),
+            "rules":      reg.get("rules", _default_rules()),
+        })
+    return result
 
 
 def tick_to_wall_clock(tick_ms: int, calibration: dict | None) -> datetime | None:
@@ -200,6 +248,9 @@ def receive_heartbeat(plc_id: str):
         defn = find_definition(seq_name)
         registry["plc_part_num"]   = defn.get("part_num", "")
         registry["plc_machine_id"] = defn.get("machine_id", "")
+
+    if "rules" not in registry:
+        registry["rules"] = _default_rules()
 
     registry["last_heartbeat"] = now_iso
     registry["plc_tick_ms"]    = body.get("tick")
@@ -346,10 +397,201 @@ def list_sequences():
 
 
 # ---------------------------------------------------------------------------
+# UI page routes
+# ---------------------------------------------------------------------------
+
+@app.route("/")
+def index():
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+
+@app.route("/designer")
+def designer():
+    return render_template("designer.html")
+
+
+# ---------------------------------------------------------------------------
+# Server-Sent Events — pushes PLC status to dashboard every 5 s
+# ---------------------------------------------------------------------------
+
+@app.route("/events")
+def sse_stream():
+    def generate():
+        while True:
+            yield f"data: {json.dumps(_plc_status_all())}\n\n"
+            time.sleep(5)
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# PLC API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/plcs", methods=["GET"])
+def api_plcs():
+    return jsonify(_plc_status_all())
+
+
+@app.route("/api/plcs/<plc_id>", methods=["GET"])
+def api_plc_detail(plc_id: str):
+    registry = load_registry(plc_id)
+    if registry is None:
+        abort(404, description=f"Unknown PLC: {plc_id}")
+    if "rules" not in registry:
+        registry["rules"] = _default_rules()
+    return jsonify(registry)
+
+
+@app.route("/api/plcs/<plc_id>/config", methods=["POST"])
+def api_plc_config(plc_id: str):
+    registry = load_registry(plc_id)
+    if registry is None:
+        abort(404, description=f"Unknown PLC: {plc_id}")
+
+    body = request.get_json(force=True, silent=True) or {}
+
+    if "description" in body:
+        registry["description"] = str(body["description"])
+
+    if "rules" in body:
+        current = registry.get("rules", _default_rules())
+        for key in ("max_concurrent_outputs", "max_step_duration_ms",
+                    "max_total_duration_ms", "max_steps"):
+            if key in body["rules"]:
+                current[key] = int(body["rules"][key])
+        registry["rules"] = current
+
+    save_registry(plc_id, registry)
+    return jsonify({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Sequence definition API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/sequences/definitions", methods=["GET"])
+def api_list_definitions():
+    if not os.path.exists(DEFINITIONS_DIR):
+        return jsonify([])
+    result = []
+    for fname in sorted(os.listdir(DEFINITIONS_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(DEFINITIONS_DIR, fname)) as f:
+                d = json.load(f)
+            version  = d.get("version", 1)
+            bin_name = f"{d.get('sequence_id', fname[:-5])}_v{version}.bin"
+            compiled = os.path.exists(os.path.join(COMPILED_DIR, bin_name))
+            result.append({
+                "sequence_id": d.get("sequence_id"),
+                "version":     version,
+                "description": d.get("description", ""),
+                "target_plc":  d.get("target_plc", ""),
+                "step_count":  len(d.get("steps", [])),
+                "compiled":    compiled,
+            })
+        except (json.JSONDecodeError, OSError):
+            continue
+    return jsonify(result)
+
+
+@app.route("/api/sequences/definitions", methods=["POST"])
+def api_save_definition():
+    definition = request.get_json(force=True, silent=True)
+    if not definition or "sequence_id" not in definition:
+        abort(400, description="sequence_id required")
+
+    seq_id = definition["sequence_id"].strip()
+    if not seq_id:
+        abort(400, description="sequence_id must not be empty")
+
+    os.makedirs(DEFINITIONS_DIR, exist_ok=True)
+    out_path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
+    with open(out_path, "w") as f:
+        json.dump(definition, f, indent=2)
+
+    return jsonify({"status": "ok", "path": out_path})
+
+
+@app.route("/api/sequences/definitions/<seq_id>", methods=["GET"])
+def api_get_definition(seq_id: str):
+    path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
+    if not os.path.exists(path):
+        abort(404, description=f"Definition not found: {seq_id}")
+    with open(path) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/sequences/compile", methods=["POST"])
+def api_compile():
+    body   = request.get_json(force=True, silent=True) or {}
+    seq_id = body.get("sequence_id", "").strip()
+    if not seq_id:
+        abort(400, description="sequence_id required")
+
+    def_path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
+    if not os.path.exists(def_path):
+        abort(404, description=f"Definition not found: {seq_id}")
+
+    try:
+        with open(def_path) as f:
+            definition = json.load(f)
+        out_path, _ = compile_from_dict(definition, COMPILED_DIR)
+        return jsonify({"status": "ok", "output_file": os.path.basename(out_path)})
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/sequences/deploy", methods=["POST"])
+def api_deploy():
+    body   = request.get_json(force=True, silent=True) or {}
+    seq_id = body.get("sequence_id", "").strip()
+    plc_id = body.get("plc_id", "").strip()
+    if not seq_id or not plc_id:
+        abort(400, description="sequence_id and plc_id required")
+
+    def_path = os.path.join(DEFINITIONS_DIR, f"{seq_id}.json")
+    if not os.path.exists(def_path):
+        abort(404, description=f"Definition not found: {seq_id}")
+
+    with open(def_path) as f:
+        definition = json.load(f)
+
+    version  = definition.get("version", 1)
+    bin_path = os.path.join(COMPILED_DIR, f"{seq_id}_v{version}.bin")
+    if not os.path.exists(bin_path):
+        abort(400, description=f"Compile first — {seq_id}_v{version}.bin not found")
+
+    registry = load_registry(plc_id)
+    if registry is None:
+        abort(404, description=f"Unknown PLC: {plc_id}")
+
+    registry["active_sequence"] = seq_id
+    registry["active_version"]  = version
+    registry["active_bin"]      = os.path.relpath(bin_path, SERVER_ROOT)
+    registry["deployed_at"]     = datetime.now(timezone.utc).isoformat()
+    save_registry(plc_id, registry)
+
+    print(f"[Pi] Deployed '{seq_id}' v{version} to {plc_id}")
+    return jsonify({"status": "ok", "sequence_id": seq_id, "plc_id": plc_id, "version": version})
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     app.run(
         host=os.environ.get("FLASK_HOST", "0.0.0.0"),
         port=int(os.environ.get("FLASK_PORT", 5000)),
         debug=os.environ.get("FLASK_DEBUG", "false").lower() == "true",
+        threaded=True,
     )

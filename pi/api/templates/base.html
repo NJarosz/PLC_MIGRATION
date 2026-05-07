@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PLC Manager{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav>
+        <span class="nav-brand">PLC Manager</span>
+        <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
+        <a href="{{ url_for('designer') }}"  class="{{ 'active' if request.endpoint == 'designer'  }}">Sequence Designer</a>
+    </nav>
+    <div class="page">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>

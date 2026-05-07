@@ -1,0 +1,420 @@
+{% extends "base.html" %}
+{% block title %}Sequence Designer — PLC Manager{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div x-data="designer()" x-init="init()" class="designer-layout">
+
+    <!-- ── Sidebar: saved sequences ── -->
+    <aside class="card designer-sidebar">
+        <div class="sidebar-header">
+            <h3>Sequences</h3>
+            <button class="btn btn-sm btn-primary" @click="newSequence()">+ New</button>
+        </div>
+
+        <div class="seq-list">
+            <template x-if="savedSequences.length === 0">
+                <p class="text-muted" style="font-size:12px">No sequences saved yet.</p>
+            </template>
+
+            <template x-for="s in savedSequences" :key="s.sequence_id">
+                <div class="seq-item" :class="{ active: seq_id === s.sequence_id }" @click="loadSequence(s.sequence_id)">
+                    <div class="seq-item-name" x-text="s.sequence_id"></div>
+                    <div class="seq-item-meta">
+                        <span class="compiled-dot" :class="{ yes: s.compiled }"></span>
+                        <span x-text="'v' + s.version + ' · ' + s.step_count + ' steps'"></span>
+                    </div>
+
+                    <!-- Deploy inline -->
+                    <div class="deploy-inline" style="margin-top:8px" x-show="s.compiled" @click.stop>
+                        <select x-model="deployTargets[s.sequence_id]" style="flex:1;font-size:12px;padding:3px 6px">
+                            <option value="">— PLC —</option>
+                            <template x-for="plc in plcs" :key="plc.plc_id">
+                                <option :value="plc.plc_id" x-text="plc.plc_id"></option>
+                            </template>
+                        </select>
+                        <button class="btn btn-sm btn-success"
+                                :disabled="!deployTargets[s.sequence_id]"
+                                @click="deploySequence(s.sequence_id, deployTargets[s.sequence_id])">
+                            Deploy
+                        </button>
+                    </div>
+                    <div x-show="deployStatus[s.sequence_id]" class="status-msg ok" style="font-size:11px;margin-top:4px" x-text="deployStatus[s.sequence_id]"></div>
+                </div>
+            </template>
+        </div>
+    </aside>
+
+    <!-- ── Main editor ── -->
+    <div class="designer-main">
+
+        <!-- Metadata -->
+        <div class="card section">
+            <div class="section-title">Sequence Details</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Sequence ID</label>
+                    <input type="text" x-model="seq_id" placeholder="e.g. seq_003" @input="markDirty()">
+                </div>
+                <div class="form-group">
+                    <label>Version</label>
+                    <input type="number" x-model.number="version" min="1" style="width:80px" @input="markDirty()">
+                </div>
+                <div class="form-group">
+                    <label>Target PLC</label>
+                    <select x-model="target_plc" @change="onPlcChange(); markDirty()">
+                        <option value="">— None —</option>
+                        <template x-for="plc in plcs" :key="plc.plc_id">
+                            <option :value="plc.plc_id" x-text="plc.plc_id"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Part Number</label>
+                    <input type="text" x-model="part_num" placeholder="PN-000001" @input="markDirty()">
+                </div>
+                <div class="form-group">
+                    <label>Machine ID</label>
+                    <input type="text" x-model="machine_id" placeholder="M001" @input="markDirty()">
+                </div>
+            </div>
+            <div class="form-group" style="margin-top:10px">
+                <label>Description</label>
+                <input type="text" x-model="description" placeholder="Optional description" @input="markDirty()">
+            </div>
+
+            <!-- Rules banner -->
+            <div class="rules-banner" x-show="rules">
+                <span>Max outputs: <span x-text="rules?.max_concurrent_outputs"></span></span>
+                <span>Max step: <span x-text="formatMs(rules?.max_step_duration_ms)"></span></span>
+                <span>Max total: <span x-text="formatMs(rules?.max_total_duration_ms)"></span></span>
+                <span>Max steps: <span x-text="rules?.max_steps"></span></span>
+            </div>
+        </div>
+
+        <!-- Steps -->
+        <div class="card section">
+            <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+                <span>Steps <span class="text-muted" x-text="'(' + steps.length + ')'"></span></span>
+                <button class="btn btn-sm btn-secondary" @click="addStep()"
+                        :disabled="rules && steps.length >= rules.max_steps">
+                    + Add Step
+                </button>
+            </div>
+
+            <!-- Empty state -->
+            <div class="steps-empty" x-show="steps.length === 0">
+                No steps yet. Click <strong>+ Add Step</strong> to build your sequence.
+            </div>
+
+            <!-- Step cards (Sortable target) -->
+            <div id="steps-list">
+                <template x-for="(step, index) in steps" :key="step._id">
+                    <div class="step-card" :class="{ 'has-error': stepErrors(step).length > 0 }">
+                        <div class="step-header">
+                            <span class="drag-handle" title="Drag to reorder">⠿</span>
+                            <span class="step-num">Step <span x-text="index + 1"></span></span>
+                            <span x-show="activeRelayCount(step) === 0" class="text-muted" style="font-size:11px">all off</span>
+                            <button class="btn-icon" @click="removeStep(index)" title="Delete step">✕</button>
+                        </div>
+
+                        <!-- Relay toggles -->
+                        <div class="relay-row">
+                            <template x-for="(active, ri) in step.relays" :key="ri">
+                                <button class="relay-btn"
+                                        :class="active ? 'active-r' + (ri + 1) : ''"
+                                        @click="toggleRelay(index, ri); markDirty()">
+                                    <span class="relay-label" x-text="'R' + (ri + 1)"></span>
+                                    <span class="relay-indicator"></span>
+                                </button>
+                            </template>
+                        </div>
+
+                        <!-- Duration -->
+                        <div class="duration-row">
+                            <label>Duration</label>
+                            <input class="duration-input" type="number" x-model.number="step.duration_ms"
+                                   min="0" step="100" @input="markDirty()">
+                            <span class="duration-unit">ms</span>
+                            <span class="text-muted" style="font-size:11px;margin-left:4px"
+                                  x-show="step.duration_ms >= 1000"
+                                  x-text="'(' + (step.duration_ms / 1000).toFixed(1) + 's)'"></span>
+                        </div>
+
+                        <!-- Optional note -->
+                        <div class="step-note">
+                            <input type="text" x-model="step.note" placeholder="Note (optional)" @input="markDirty()">
+                        </div>
+
+                        <!-- Validation errors -->
+                        <div class="step-errors" x-show="stepErrors(step).length > 0">
+                            <template x-for="err in stepErrors(step)" :key="err">
+                                <span class="error-pill" x-text="err"></span>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Timeline -->
+        <div class="card timeline-section" x-show="steps.length > 0">
+            <div class="section-title" style="margin-bottom:10px">Timeline</div>
+            <div class="timeline">
+                <div style="display:flex">
+                    <div class="timeline-labels">
+                        <span class="tl-label" style="color:var(--r1)">R1</span>
+                        <span class="tl-label" style="color:var(--r2)">R2</span>
+                        <span class="tl-label" style="color:var(--r3)">R3</span>
+                        <span class="tl-label" style="color:var(--r4)">R4</span>
+                    </div>
+                    <div class="timeline-body" style="flex:1;overflow-x:auto">
+                        <template x-for="(step, si) in steps" :key="step._id">
+                            <div class="tl-step"
+                                 :style="'flex:' + Math.max(step.duration_ms, 100)"
+                                 :title="'Step ' + (si+1) + ': ' + step.duration_ms + 'ms'">
+                                <template x-for="(active, ri) in step.relays" :key="ri">
+                                    <div class="tl-relay" :class="active ? 'on-r' + (ri + 1) : ''"></div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div class="timeline-footer">
+                    Total: <strong x-text="formatMs(totalDuration)"></strong>
+                    <span x-show="rules" class="text-muted" x-text="' / ' + formatMs(rules?.max_total_duration_ms)"></span>
+                    <span class="error-text" x-show="totalDurationOver"> — exceeds limit</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action bar -->
+        <div class="action-bar">
+            <button class="btn btn-secondary" @click="saveDefinition()"
+                    :disabled="!seq_id.trim()">
+                Save Definition
+            </button>
+            <button class="btn btn-primary" @click="compile()"
+                    :disabled="!seq_id.trim() || steps.length === 0">
+                Compile
+            </button>
+            <span class="status-msg" :class="statusClass" x-text="statusMsg"></span>
+        </div>
+
+    </div><!-- /designer-main -->
+</div><!-- /designer-layout -->
+
+<script>
+let _stepCounter = 0;
+
+function designer() {
+    return {
+        seq_id:      '',
+        version:     1,
+        description: '',
+        target_plc:  '',
+        part_num:    '',
+        machine_id:  '',
+        steps:       [],
+        dirty:       false,
+
+        plcs:          [],
+        savedSequences:[],
+        deployTargets: {},
+        deployStatus:  {},
+
+        _rules: null,
+        statusMsg:  '',
+        statusClass: '',
+
+        get rules()   { return this._rules; },
+        get totalDuration() {
+            return this.steps.reduce((s, step) => s + (parseInt(step.duration_ms) || 0), 0);
+        },
+        get totalDurationOver() {
+            return this._rules && this.totalDuration > this._rules.max_total_duration_ms;
+        },
+
+        async init() {
+            const [plcsRes, defsRes] = await Promise.all([
+                fetch('/api/plcs'),
+                fetch('/api/sequences/definitions'),
+            ]);
+            this.plcs           = await plcsRes.json();
+            this.savedSequences = await defsRes.json();
+            this.$nextTick(() => this.initSortable());
+
+            const urlSeq = new URLSearchParams(location.search).get('seq');
+            if (urlSeq) await this.loadSequence(urlSeq);
+        },
+
+        initSortable() {
+            const el = document.getElementById('steps-list');
+            if (!el) return;
+            Sortable.create(el, {
+                handle:      '.drag-handle',
+                animation:   150,
+                ghostClass:  'sortable-ghost',
+                chosenClass: 'sortable-chosen',
+                onEnd: (evt) => {
+                    const moved = this.steps.splice(evt.oldIndex, 1)[0];
+                    this.steps.splice(evt.newIndex, 0, moved);
+                    this.markDirty();
+                },
+            });
+        },
+
+        onPlcChange() {
+            const plc = this.plcs.find(p => p.plc_id === this.target_plc);
+            this._rules = plc ? plc.rules : null;
+        },
+
+        markDirty() { this.dirty = true; },
+
+        newSequence() {
+            this.seq_id = ''; this.version = 1; this.description = '';
+            this.target_plc = ''; this.part_num = ''; this.machine_id = '';
+            this.steps = []; this._rules = null; this.dirty = false;
+            this.statusMsg = '';
+            this.$nextTick(() => this.initSortable());
+        },
+
+        addStep() {
+            this.steps.push({
+                _id:         ++_stepCounter,
+                relays:      [false, false, false, false],
+                duration_ms: 1000,
+                note:        '',
+            });
+            this.markDirty();
+            this.$nextTick(() => {
+                document.querySelector('#steps-list .step-card:last-child')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+        },
+
+        removeStep(index) {
+            this.steps.splice(index, 1);
+            this.markDirty();
+        },
+
+        toggleRelay(stepIndex, relayIndex) {
+            this.steps[stepIndex].relays[relayIndex] = !this.steps[stepIndex].relays[relayIndex];
+        },
+
+        activeRelayCount(step) { return step.relays.filter(Boolean).length; },
+
+        stepErrors(step) {
+            if (!this._rules) return [];
+            const errs = [];
+            if (this.activeRelayCount(step) > this._rules.max_concurrent_outputs)
+                errs.push(`max ${this._rules.max_concurrent_outputs} outputs`);
+            if (parseInt(step.duration_ms) > this._rules.max_step_duration_ms)
+                errs.push(`max ${this.formatMs(this._rules.max_step_duration_ms)} per step`);
+            return errs;
+        },
+
+        toDefinition() {
+            return {
+                sequence_id: this.seq_id.trim(),
+                version:     parseInt(this.version) || 1,
+                description: this.description,
+                target_plc:  this.target_plc,
+                part_num:    this.part_num,
+                machine_id:  this.machine_id,
+                steps: this.steps.map(s => ({
+                    relays:      s.relays.map((on, i) => on ? i + 1 : null).filter(r => r !== null),
+                    duration_ms: parseInt(s.duration_ms) || 0,
+                    ...(s.note ? { note: s.note } : {}),
+                })),
+            };
+        },
+
+        async saveDefinition() {
+            if (!this.seq_id.trim()) { alert('Sequence ID is required'); return false; }
+            const r = await fetch('/api/sequences/definitions', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(this.toDefinition()),
+            });
+            if (r.ok) {
+                this.dirty = false;
+                this.setStatus('Saved ✓', 'ok');
+                await this.refreshSavedList();
+                return true;
+            }
+            this.setStatus('Save failed', 'err');
+            return false;
+        },
+
+        async compile() {
+            if (!await this.saveDefinition()) return;
+            const r = await fetch('/api/sequences/compile', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ sequence_id: this.seq_id.trim() }),
+            });
+            const data = await r.json();
+            if (r.ok) {
+                this.setStatus(`Compiled → ${data.output_file}`, 'ok');
+                await this.refreshSavedList();
+            } else {
+                this.setStatus(`Error: ${data.error}`, 'err');
+            }
+        },
+
+        async deploySequence(seqId, plcId) {
+            const r = await fetch('/api/sequences/deploy', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ sequence_id: seqId, plc_id: plcId }),
+            });
+            const data = await r.json();
+            this.deployStatus[seqId] = r.ok ? `Deployed to ${plcId} ✓` : `Error: ${data.description}`;
+            setTimeout(() => { delete this.deployStatus[seqId]; }, 4000);
+        },
+
+        async loadSequence(seqId) {
+            const r = await fetch(`/api/sequences/definitions/${seqId}`);
+            if (!r.ok) return;
+            const def = await r.json();
+            this.seq_id      = def.sequence_id;
+            this.version     = def.version;
+            this.description = def.description || '';
+            this.target_plc  = def.target_plc  || '';
+            this.part_num    = def.part_num     || '';
+            this.machine_id  = def.machine_id   || '';
+            this.steps = def.steps.map(s => ({
+                _id:         ++_stepCounter,
+                relays:      [1,2,3,4].map(n => s.relays.includes(n)),
+                duration_ms: s.duration_ms,
+                note:        s.note || '',
+            }));
+            this.onPlcChange();
+            this.dirty = false;
+            this.statusMsg = '';
+            this.$nextTick(() => this.initSortable());
+        },
+
+        async refreshSavedList() {
+            const r = await fetch('/api/sequences/definitions');
+            this.savedSequences = await r.json();
+        },
+
+        setStatus(msg, cls) {
+            this.statusMsg   = msg;
+            this.statusClass = cls;
+            setTimeout(() => { this.statusMsg = ''; this.statusClass = ''; }, 5000);
+        },
+
+        formatMs(ms) {
+            if (!ms) return '0ms';
+            return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
+        },
+    };
+}
+</script>
+{% endblock %}
