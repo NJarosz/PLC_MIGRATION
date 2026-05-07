@@ -266,12 +266,6 @@ def receive_heartbeat(plc_id: str):
             "plc_tick_ms":   int(body["tick"]),
         }
 
-    # When the active sequence changes, look up and cache part/machine from its definition
-    if seq_name and seq_name != registry.get("plc_seq"):
-        defn, _ = find_definition(seq_name)
-        registry["plc_part_num"]   = defn.get("part_num", "")
-        registry["plc_machine_id"] = defn.get("machine_id", "")
-
     if "rules" not in registry:
         registry["rules"] = _default_rules()
 
@@ -484,6 +478,10 @@ def api_plc_config(plc_id: str):
 
     if "description" in body:
         registry["description"] = str(body["description"])
+    if "part_num" in body:
+        registry["plc_part_num"] = str(body["part_num"])
+    if "machine_id" in body:
+        registry["plc_machine_id"] = str(body["machine_id"])
 
     if "rules" in body:
         current = registry.get("rules", _default_rules())

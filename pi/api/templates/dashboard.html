@@ -20,9 +20,12 @@
                     <span class="status-dot" :class="plc.status"></span>
                     <h2 x-text="plc.plc_id"></h2>
                     <span class="state-badge" :class="'state-' + plc.state" x-text="plc.state || '—'"></span>
+                    <button class="btn-icon" title="Edit config" style="font-size:14px;margin-left:auto"
+                            @click="startEdit(plc)">✎</button>
                 </div>
 
-                <div>
+                <!-- Read-only meta -->
+                <div x-show="!editMode[plc.plc_id]">
                     <div class="plc-meta">
                         <span class="meta-label">Machine</span>
                         <span x-text="plc.machine_id || '—'"></span>
@@ -41,7 +44,31 @@
                     </div>
                 </div>
 
-                <div class="plc-card-footer">
+                <!-- Inline edit form -->
+                <template x-if="editMode[plc.plc_id]">
+                    <div class="plc-edit-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Machine ID</label>
+                                <input type="text" x-model="editBuf[plc.plc_id].machine_id" placeholder="M001">
+                            </div>
+                            <div class="form-group">
+                                <label>Part Number</label>
+                                <input type="text" x-model="editBuf[plc.plc_id].part_num" placeholder="PN-000001">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" x-model="editBuf[plc.plc_id].description" placeholder="Optional note">
+                        </div>
+                        <div class="plc-edit-actions">
+                            <button class="btn btn-sm btn-primary" @click="saveConfig(plc.plc_id)">Save</button>
+                            <button class="btn btn-sm btn-secondary" @click="editMode[plc.plc_id] = false">Cancel</button>
+                        </div>
+                    </div>
+                </template>
+
+                <div class="plc-card-footer" x-show="!editMode[plc.plc_id]">
                     <span class="fault-badge" x-show="plc.fault">FAULT</span>
                     <span class="text-muted" style="font-size:12px" x-show="plc.description" x-text="plc.description"></span>
                 </div>
@@ -55,11 +82,13 @@ function dashboard() {
     return {
         plcs:      [],
         connected: false,
+        editMode:  {},
+        editBuf:   {},
 
         init() {
             fetch('/api/plcs')
                 .then(r => r.json())
-                .then(d => this.plcs = d);
+                .then(d => { this.plcs = d; });
 
             const es = new EventSource('/events');
             es.onmessage = e => {
@@ -67,6 +96,31 @@ function dashboard() {
                 this.connected = true;
             };
             es.onerror = () => { this.connected = false; };
+        },
+
+        startEdit(plc) {
+            this.editBuf[plc.plc_id] = {
+                machine_id:  plc.machine_id  || '',
+                part_num:    plc.part_num    || '',
+                description: plc.description || '',
+            };
+            this.editMode[plc.plc_id] = true;
+        },
+
+        async saveConfig(plcId) {
+            const buf = this.editBuf[plcId];
+            const r = await fetch(`/api/plcs/${plcId}/config`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({
+                    machine_id:  buf.machine_id,
+                    part_num:    buf.part_num,
+                    description: buf.description,
+                }),
+            });
+            if (r.ok) {
+                this.editMode[plcId] = false;
+            }
         },
 
         cardClass(plc) {
@@ -78,7 +132,7 @@ function dashboard() {
 
         formatAge(s) {
             if (s === null || s === undefined) return 'Never';
-            if (s < 60)  return `${s}s ago`;
+            if (s < 60)  return `${Math.round(s)}s ago`;
             if (s < 3600) return `${Math.round(s / 60)}m ago`;
             return `${Math.round(s / 3600)}h ago`;
         },

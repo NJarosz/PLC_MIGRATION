@@ -42,7 +42,7 @@
                             Deploy
                         </button>
                     </div>
-                    <div x-show="deployStatus[s.sequence_id]" class="status-msg ok" style="font-size:11px;margin-top:4px" x-text="deployStatus[s.sequence_id]"></div>
+                    <div x-show="deployStatus[s.sequence_id]" class="status-msg err" style="font-size:11px;margin-top:4px" x-text="deployStatus[s.sequence_id]"></div>
                 </div>
             </template>
         </div>
@@ -71,14 +71,6 @@
                             <option :value="plc.plc_id" x-text="plc.plc_id"></option>
                         </template>
                     </select>
-                </div>
-                <div class="form-group">
-                    <label>Part Number</label>
-                    <input type="text" x-model="part_num" placeholder="PN-000001" @input="markDirty()">
-                </div>
-                <div class="form-group">
-                    <label>Machine ID</label>
-                    <input type="text" x-model="machine_id" placeholder="M001" @input="markDirty()">
                 </div>
             </div>
             <div class="form-group" style="margin-top:10px">
@@ -207,6 +199,25 @@
     </div><!-- /designer-main -->
 </div><!-- /designer-layout -->
 
+<!-- Deploy reminder modal -->
+<div class="modal-backdrop" x-show="deployReminder" style="display:none" @click.self="deployReminder = false">
+    <div class="modal">
+        <h3>Sequence queued on Pi ✓</h3>
+        <p>
+            <strong x-text="deployReminderSeq"></strong> is now set as the active sequence for
+            <strong x-text="deployReminderPlc"></strong> on the server.
+        </p>
+        <div class="modal-warn">
+            The PLC won't load the new sequence until it triggers a pull from the server —
+            typically on the next power cycle or when a sequence-load is initiated locally on the device.
+            The dashboard will show the updated sequence name once the PLC pulls and sends a heartbeat.
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" @click="deployReminder = false">Got it</button>
+        </div>
+    </div>
+</div>
+
 <script>
 let _stepCounter = 0;
 
@@ -216,15 +227,17 @@ function designer() {
         version:     1,
         description: '',
         target_plc:  '',
-        part_num:    '',
-        machine_id:  '',
         steps:       [],
         dirty:       false,
 
-        plcs:          [],
-        savedSequences:[],
-        deployTargets: {},
-        deployStatus:  {},
+        plcs:           [],
+        savedSequences: [],
+        deployTargets:  {},
+        deployStatus:   {},
+
+        deployReminder:    false,
+        deployReminderSeq: '',
+        deployReminderPlc: '',
 
         _rules: null,
         statusMsg:  '',
@@ -276,7 +289,7 @@ function designer() {
 
         newSequence() {
             this.seq_id = ''; this.version = 1; this.description = '';
-            this.target_plc = ''; this.part_num = ''; this.machine_id = '';
+            this.target_plc = '';
             this.steps = []; this._rules = null; this.dirty = false;
             this.statusMsg = '';
             this.$nextTick(() => this.initSortable());
@@ -323,8 +336,6 @@ function designer() {
                 version:     parseInt(this.version) || 1,
                 description: this.description,
                 target_plc:  this.target_plc,
-                part_num:    this.part_num,
-                machine_id:  this.machine_id,
                 steps: this.steps.map(s => ({
                     relays:      s.relays.map((on, i) => on ? i + 1 : null).filter(r => r !== null),
                     duration_ms: parseInt(s.duration_ms) || 0,
@@ -373,8 +384,14 @@ function designer() {
                 body:    JSON.stringify({ sequence_id: seqId, plc_id: plcId }),
             });
             const data = await r.json();
-            this.deployStatus[seqId] = r.ok ? `Deployed to ${plcId} ✓` : `Error: ${data.description}`;
-            setTimeout(() => { delete this.deployStatus[seqId]; }, 4000);
+            if (r.ok) {
+                this.deployReminderSeq = seqId;
+                this.deployReminderPlc = plcId;
+                this.deployReminder    = true;
+            } else {
+                this.deployStatus[seqId] = `Error: ${data.description || data.error}`;
+                setTimeout(() => { delete this.deployStatus[seqId]; }, 5000);
+            }
         },
 
         async loadSequence(seqId) {
@@ -385,8 +402,6 @@ function designer() {
             this.version     = def.version;
             this.description = def.description || '';
             this.target_plc  = def.target_plc  || '';
-            this.part_num    = def.part_num     || '';
-            this.machine_id  = def.machine_id   || '';
             this.steps = def.steps.map(s => ({
                 _id:         ++_stepCounter,
                 relays:      [1,2,3,4].map(n => s.relays.includes(n)),
