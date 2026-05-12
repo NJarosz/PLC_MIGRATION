@@ -7,9 +7,11 @@
 #include "logger.h"
 #include "sha256.h"
 #include "usart.h"
+#include "lcd.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #define START_BYTE 0xAA
 #define END_BYTE   0x55
@@ -33,6 +35,9 @@ static uint32_t last_heartbeat = 0;
 static bool connected = false;
 static char active_seq_name[16] = "none";  // updated on every successful sequence receive
 static volatile bool upload_requested = false;
+static char operator_name[32] = "";
+static uint16_t run_count  = 0;
+static uint16_t count_goal = 0;  // 0 = no goal active
 
 void SupervisorComms_RequestUpload(void) {
     upload_requested = true;
@@ -43,17 +48,39 @@ void SupervisorComms_SetActiveSeqName(const char *name) {
     active_seq_name[sizeof(active_seq_name) - 1] = '\0';
 }
 
+const char* SupervisorComms_GetActiveSeqName(void) {
+    return active_seq_name;
+}
+
 void SupervisorComms_LookupEmployee(uint32_t employee_id) {
     char msg[32];
     int len = snprintf(msg, sizeof(msg), "LOOKUP_EMPLOYEE|%lu\r\n", (unsigned long)employee_id);
     HAL_UART_Transmit(&huart1, (uint8_t*)msg, (uint16_t)len, 50);
 }
 
+const char* SupervisorComms_GetOperatorName(void) {
+    return operator_name;
+}
+
+void SupervisorComms_ClearOperatorName(void) {
+    operator_name[0] = '\0';
+}
+
+void SupervisorComms_IncrementCount(void) { run_count++; }
+void SupervisorComms_ResetCount(void)     { run_count = 0; }
+uint16_t SupervisorComms_GetCount(void)   { return run_count; }
+uint16_t SupervisorComms_GetGoal(void)    { return count_goal; }
+bool SupervisorComms_IsGoalReached(void)  { return count_goal > 0 && run_count >= count_goal; }
+void SupervisorComms_SetGoal(uint16_t goal) { count_goal = goal; }
+
 static void HandleIncomingLine(const char *line) {
     if (strncmp(line, "EMPLOYEE_NAME|", 14) == 0) {
         const char *name = line + 14;
-        // LCD mock — replace with actual LCD driver call when hardware is wired
-        printf("Operator: %.24s\r\n", name);
+        strncpy(operator_name, name, sizeof(operator_name) - 1);
+        operator_name[sizeof(operator_name) - 1] = '\0';
+        LCD_ShowArmed(operator_name, run_count, count_goal);
+    } else if (strncmp(line, "SET_GOAL|", 9) == 0) {
+        count_goal = (uint16_t)atoi(line + 9);
     }
 }
 
@@ -79,18 +106,19 @@ static void UploadLogs_UART1(void)
 }
 
 
-// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>\r\n
-// State codes match SystemState_t enum: 0=BOOT 1=IDLE 2=ARMED 3=RUNNING 4=FAULT
+// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>|<count>\r\n
+// State codes: 0=BOOT 1=IDLE 2=ARMED 3=RUNNING 4=FAULT 5=GOAL_MET
 static void SendHeartbeat(void)
 {
-    char line[64];
+    char line[80];
     uint8_t fault_flag = (FAULT_LATCHED || system_state.state == STATE_FAULT) ? 1 : 0;
 
-    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u\r\n",
+    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u|%u\r\n",
                        (unsigned long)HAL_GetTick(),
                        (unsigned int)system_state.state,
                        active_seq_name,
-                       fault_flag);
+                       fault_flag,
+                       run_count);
     HAL_UART_Transmit(&huart1, (uint8_t*)line, (uint16_t)len, 50);
 }
 

@@ -29,9 +29,27 @@ void SupervisorComms_RequestUpload(void);
 // Called by SequenceStorage_Load() to restore state after a reboot.
 void SupervisorComms_SetActiveSeqName(const char *name);
 
+// Returns the currently active sequence name (e.g. "seq_001").
+const char* SupervisorComms_GetActiveSeqName(void);
+
 // Ask the ESP32 to resolve an employee number to a display name.
-// The response arrives asynchronously as an EMPLOYEE_NAME| line and is
-// printed via printf (LCD stub) when received.
+// The response arrives asynchronously and is stored internally.
 void SupervisorComms_LookupEmployee(uint32_t employee_id);
+
+// Returns the operator name from the last successful EMPLOYEE_NAME response.
+// Empty string if no lookup has completed yet.
+const char* SupervisorComms_GetOperatorName(void);
+
+// Clear the stored operator name (call on logoff).
+void SupervisorComms_ClearOperatorName(void);
+
+// Run count tracking — incremented by state machine on each sequence completion.
+// goal = 0 means no goal is active.
+void     SupervisorComms_IncrementCount(void);
+void     SupervisorComms_ResetCount(void);
+uint16_t SupervisorComms_GetCount(void);
+uint16_t SupervisorComms_GetGoal(void);
+bool     SupervisorComms_IsGoalReached(void);
+void     SupervisorComms_SetGoal(uint16_t goal);
 
 #endif

@@ -33,6 +33,17 @@ void flushPendingLogs();
 // Flushed automatically at the start of the next upload attempt.
 static String pendingLogs = "";
 
+// Send a text line to the STM32 one byte at a time with inter-byte delays.
+// The STM32 has no UART receive buffer — it polls every ~10ms scan cycle.
+// Without delays, a fast burst overwrites the single-byte hardware register and
+// all but the first byte are lost. 12ms matches the binary frame byte cadence.
+void sendToSTM32(const String& msg) {
+    for (size_t i = 0; i < msg.length(); i++) {
+        SerialSTM.write((uint8_t)msg[i]);
+        delay(12);
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -149,14 +160,14 @@ bool fetchAndSend() {
 }
 
 void forwardHeartbeat(const String& line) {
-    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault"
-    // Field indices after splitting on '|': 0=HEARTBEAT 1=tick 2=state 3=seq 4=fault
+    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault|count"
     int p1 = line.indexOf('|');
     int p2 = line.indexOf('|', p1 + 1);
     int p3 = line.indexOf('|', p2 + 1);
     int p4 = line.indexOf('|', p3 + 1);
+    int p5 = line.indexOf('|', p4 + 1);
 
-    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0) {
+    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) {
         Serial.printf("[BRIDGE] Malformed heartbeat: '%s'\n", line.c_str());
         return;
     }
@@ -164,23 +175,41 @@ void forwardHeartbeat(const String& line) {
     String tick    = line.substring(p1 + 1, p2);
     String state   = line.substring(p2 + 1, p3);
     String seqName = line.substring(p3 + 1, p4);
-    String fault   = line.substring(p4 + 1);
+    String fault   = line.substring(p4 + 1, p5);
+    String count   = line.substring(p5 + 1);
 
-    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s\n",
-                  tick.c_str(), state.c_str(), seqName.c_str(), fault.c_str());
+    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s count=%s\n",
+                  tick.c_str(), state.c_str(), seqName.c_str(), fault.c_str(), count.c_str());
 
     if (WiFi.status() != WL_CONNECTED) return;
 
-    String body = "{\"tick\":"  + tick    +
-                  ",\"state\":" + state   +
-                  ",\"seq\":\"" + seqName + "\"" +
-                  ",\"fault\":" + fault   + "}";
+    String body = "{\"tick\":"   + tick    +
+                  ",\"state\":"  + state   +
+                  ",\"seq\":\""  + seqName + "\"" +
+                  ",\"fault\":"  + fault   +
+                  ",\"count\":"  + count   + "}";
 
     HTTPClient http;
     http.begin(PI_HEARTBEAT_URL);
     http.addHeader("Content-Type", "application/json");
     int code = http.POST(body);
-    if (code != HTTP_CODE_OK) {
+
+    if (code == HTTP_CODE_OK) {
+        String resp = http.getString();
+        // Look for "count_goal" in response and forward to STM32
+        int goalIdx = resp.indexOf("\"count_goal\":");
+        if (goalIdx >= 0) {
+            goalIdx += 13;
+            while (goalIdx < resp.length() && !isDigit(resp[goalIdx])) goalIdx++;
+            int goalEnd = goalIdx;
+            while (goalEnd < resp.length() && isDigit(resp[goalEnd])) goalEnd++;
+            if (goalEnd > goalIdx) {
+                String goalStr = resp.substring(goalIdx, goalEnd);
+                sendToSTM32("SET_GOAL|" + goalStr + "\r\n");
+                Serial.printf("[BRIDGE] SET_GOAL → %s\n", goalStr.c_str());
+            }
+        }
+    } else {
         Serial.printf("[BRIDGE] Heartbeat POST failed: HTTP %d\n", code);
     }
     http.end();
@@ -273,8 +302,7 @@ void lookupEmployee(const String& line) {
     Serial.printf("[BRIDGE] Looking up employee %s\n", empId.c_str());
 
     if (WiFi.status() != WL_CONNECTED) {
-        // No connection — send a fallback so the display still updates
-        SerialSTM.print("EMPLOYEE_NAME|Employee " + empId + "\r\n");
+        sendToSTM32("EMPLOYEE_NAME|Employee " + empId + "\r\n");
         return;
     }
 
@@ -284,14 +312,16 @@ void lookupEmployee(const String& line) {
 
     if (code == HTTP_CODE_OK) {
         String payload = http.getString();
-        // Extract "name" field without pulling in a JSON library
-        int nameStart = payload.indexOf("\"name\":\"");
+        // Find "name" key, then skip past colon and any whitespace before the value
+        int nameStart = payload.indexOf("\"name\":");
         if (nameStart >= 0) {
-            nameStart += 8;
+            nameStart += 7;  // skip past "name":
+            while (nameStart < payload.length() && payload[nameStart] != '"') nameStart++;
+            nameStart++;  // skip opening quote
             int nameEnd = payload.indexOf("\"", nameStart);
             if (nameEnd >= 0) {
                 String name = payload.substring(nameStart, nameEnd);
-                SerialSTM.print("EMPLOYEE_NAME|" + name + "\r\n");
+                sendToSTM32("EMPLOYEE_NAME|" + name + "\r\n");
                 Serial.printf("[BRIDGE] Employee %s → %s\n", empId.c_str(), name.c_str());
                 http.end();
                 return;
@@ -301,6 +331,6 @@ void lookupEmployee(const String& line) {
 
     // Lookup failed — fall back to ID so display still shows something
     Serial.printf("[BRIDGE] Employee lookup failed: HTTP %d\n", code);
-    SerialSTM.print("EMPLOYEE_NAME|Employee " + empId + "\r\n");
+    sendToSTM32("EMPLOYEE_NAME|Employee " + empId + "\r\n");
     http.end();
 }

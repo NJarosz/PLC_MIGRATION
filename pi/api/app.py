@@ -141,6 +141,8 @@ def _plc_status_all() -> list:
             "description": reg.get("description", ""),
             "part_num":   reg.get("plc_part_num", ""),
             "machine_id": reg.get("plc_machine_id", ""),
+            "count":      reg.get("plc_count", 0),
+            "count_goal": reg.get("count_goal", 0),
             "rules":      reg.get("rules", _default_rules()),
         })
     return result
@@ -240,7 +242,7 @@ def get_deployment(plc_id: str):
 # ---------------------------------------------------------------------------
 
 # State codes match SystemState_t enum in state_machine.h
-_STATE_NAMES = {0: "BOOT", 1: "IDLE", 2: "ARMED", 3: "RUNNING", 4: "FAULT"}
+_STATE_NAMES = {0: "BOOT", 1: "IDLE", 2: "ARMED", 3: "RUNNING", 4: "FAULT", 5: "GOAL_MET"}
 _STALE_THRESHOLD_S = 30  # mark offline if no heartbeat for this many seconds
 
 
@@ -274,9 +276,11 @@ def receive_heartbeat(plc_id: str):
     registry["plc_state"]      = _STATE_NAMES.get(body.get("state"), "UNKNOWN")
     registry["plc_seq"]        = seq_name
     registry["plc_fault"]      = bool(body.get("fault", 0))
+    registry["plc_count"]      = int(body.get("count", 0))
 
+    count_goal = registry.get("count_goal", 0)
     save_registry(plc_id, registry)
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "count_goal": count_goal})
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +486,9 @@ def api_plc_config(plc_id: str):
         registry["plc_part_num"] = str(body["part_num"])
     if "machine_id" in body:
         registry["plc_machine_id"] = str(body["machine_id"])
+
+    if "count_goal" in body:
+        registry["count_goal"] = max(0, int(body["count_goal"]))
 
     if "rules" in body:
         current = registry.get("rules", _default_rules())

@@ -9,7 +9,8 @@ typedef enum {
     STATE_IDLE,
     STATE_ARMED,
     STATE_RUNNING,
-    STATE_FAULT
+    STATE_FAULT,
+    STATE_GOAL_MET    // count reached goal; waiting for operator acknowledgement
 } SystemState_t;
 
 typedef struct {

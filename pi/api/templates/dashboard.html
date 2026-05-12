@@ -41,6 +41,10 @@
                         <span x-text="plc.seq || '—'"></span>
                     </div>
                     <div class="plc-meta">
+                        <span class="meta-label">Count / Goal</span>
+                        <span x-text="(plc.count || 0) + ' / ' + (plc.count_goal > 0 ? plc.count_goal : '—')"></span>
+                    </div>
+                    <div class="plc-meta">
                         <span class="meta-label">Last seen</span>
                         <span x-text="formatAge(plc.hb_age_s)"></span>
                     </div>
@@ -62,6 +66,10 @@
                         <div class="form-group">
                             <label>Description</label>
                             <input type="text" x-model="editBuf[plc.plc_id].description" placeholder="Optional note">
+                        </div>
+                        <div class="form-group">
+                            <label>Count Goal <small style="font-weight:normal;color:var(--text-muted)">(0 = no goal)</small></label>
+                            <input type="number" x-model="editBuf[plc.plc_id].count_goal" placeholder="0" min="0" style="width:120px">
                         </div>
                         <div class="plc-edit-actions">
                             <button class="btn btn-sm btn-primary" @click="saveConfig(plc.plc_id)">Save</button>
@@ -156,6 +164,7 @@ function dashboard() {
                 machine_id:  plc.machine_id  || '',
                 part_num:    plc.part_num    || '',
                 description: plc.description || '',
+                count_goal:  plc.count_goal  || 0,
             };
             this.editMode[plc.plc_id] = true;
         },
@@ -169,6 +178,7 @@ function dashboard() {
                     machine_id:  buf.machine_id,
                     part_num:    buf.part_num,
                     description: buf.description,
+                    count_goal:  parseInt(buf.count_goal) || 0,
                 }),
             });
             if (r.ok) {

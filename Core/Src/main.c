@@ -18,7 +18,9 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "i2c.h"
 #include "iwdg.h"
+#include "spi.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -27,8 +29,10 @@
 #include <stdbool.h>
 #include "usart.h"
 #include "gpio.h"
+#include "lcd.h"
 #include "supervisor_comms.h"
 #include "inputs.h"
+#include "mfrc522.h"
 #include "logger.h"
 #include "outputs.h"
 #include "safety.h"
@@ -100,9 +104,13 @@ int main(void)
   MX_USART2_UART_Init();
   MX_IWDG_Init();
   MX_USART1_UART_Init();
+  MX_SPI2_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
   // Initialize modules
+  MFRC522_Init();
+  LCD_Init();
   Inputs_Init();
   Outputs_Init();
   Safety_Init();
