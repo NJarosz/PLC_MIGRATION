@@ -499,12 +499,7 @@ def api_plc_config(plc_id: str):
     if "description" in body:
         registry["description"] = str(body["description"])
     if "part_num" in body:
-        new_part = str(body["part_num"])
-        if new_part != registry.get("plc_part_num", ""):
-            # Part number changed — flag the MCU count for reset on next heartbeat.
-            registry["count_reset_requested"] = True
-            registry["plc_count"] = 0
-        registry["plc_part_num"] = new_part
+        registry["plc_part_num"] = str(body["part_num"])
     if "machine_id" in body:
         registry["plc_machine_id"] = str(body["machine_id"])
 
@@ -519,6 +514,17 @@ def api_plc_config(plc_id: str):
                 current[key] = int(body["rules"][key])
         registry["rules"] = current
 
+    save_registry(plc_id, registry)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/plcs/<plc_id>/reset_count", methods=["POST"])
+def api_reset_count(plc_id: str):
+    registry = load_registry(plc_id)
+    if registry is None:
+        abort(404, description=f"Unknown PLC: {plc_id}")
+    registry["count_reset_requested"] = True
+    registry["plc_count"] = 0
     save_registry(plc_id, registry)
     return jsonify({"status": "ok"})
 

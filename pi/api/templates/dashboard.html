@@ -99,6 +99,19 @@
                 <div class="plc-card-footer" x-show="!editMode[plc.plc_id]">
                     <span class="fault-badge" x-show="plc.fault">FAULT</span>
                     <span class="text-muted" style="font-size:12px" x-show="plc.description" x-text="plc.description"></span>
+                    <button class="btn btn-sm btn-danger"
+                            style="margin-left:auto;font-size:11px"
+                            x-show="!resetCountConfirm[plc.plc_id]"
+                            @click="resetCountConfirm[plc.plc_id] = true">
+                        Reset Count
+                    </button>
+                    <template x-if="resetCountConfirm[plc.plc_id]">
+                        <span style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:11px">
+                            <span style="color:var(--text-muted)">Sure?</span>
+                            <button class="btn btn-sm btn-danger" @click="confirmResetCount(plc.plc_id)">Yes</button>
+                            <button class="btn btn-sm btn-secondary" @click="resetCountConfirm[plc.plc_id] = false">No</button>
+                        </span>
+                    </template>
                 </div>
             </div>
         </template>
@@ -127,12 +140,13 @@
 <script>
 function dashboard() {
     return {
-        plcs:      [],
-        sequences: [],
-        connected: false,
-        editMode:  {},
-        editBuf:   {},
-        seqSelect: {},
+        plcs:             [],
+        sequences:        [],
+        connected:        false,
+        editMode:         {},
+        editBuf:          {},
+        seqSelect:        {},
+        resetCountConfirm: {},
 
         deployReminder:    false,
         deployReminderSeq: '',
@@ -199,6 +213,11 @@ function dashboard() {
                 this.deployReminder    = true;
                 this.seqSelect[plcId]  = '';
             }
+        },
+
+        async confirmResetCount(plcId) {
+            this.resetCountConfirm[plcId] = false;
+            await fetch(`/api/plcs/${plcId}/reset_count`, { method: 'POST' });
         },
 
         cardClass(plc) {
