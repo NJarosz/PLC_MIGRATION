@@ -71,9 +71,11 @@ void SequenceStorage_Load(void) {
     memcpy(table, record->steps, record->length * sizeof(SequenceStep_t));
     SequenceEngine_SetLength(record->length);
 
-    // Restore sequence name so heartbeats report correctly before next receive
+    // Restore sequence name and part number so display/heartbeats are correct before next receive
     char name[16];
     memcpy(name, record->metadata.seq_name, 15);
     name[15] = '\0';
     SupervisorComms_SetActiveSeqName(name);
+
+    // part_num is not restored here — it comes from the Pi registry via heartbeat (SET_PART).
 }

@@ -34,11 +34,13 @@ static uint8_t rx_buffer[256];
 static uint32_t last_heartbeat = 0;
 static bool connected = false;
 static char active_seq_name[16] = "none";  // updated on every successful sequence receive
+static char active_part_num[12] = "";      // updated on every successful sequence receive
 static volatile bool upload_requested = false;
 static char operator_name[32] = "";
 static uint16_t run_count  = 0;
 static uint16_t count_goal = 0;  // 0 = no goal active
 static bool boot_heartbeat_pending = true;  // cleared after first heartbeat; Pi uses it to restore count
+static bool new_sequence_available = false;
 
 void SupervisorComms_RequestUpload(void) {
     upload_requested = true;
@@ -52,6 +54,18 @@ void SupervisorComms_SetActiveSeqName(const char *name) {
 const char* SupervisorComms_GetActiveSeqName(void) {
     return active_seq_name;
 }
+
+void SupervisorComms_SetPartNum(const char *part_num) {
+    strncpy(active_part_num, part_num, sizeof(active_part_num) - 1);
+    active_part_num[sizeof(active_part_num) - 1] = '\0';
+}
+
+const char* SupervisorComms_GetPartNum(void) {
+    return active_part_num;
+}
+
+bool SupervisorComms_NewSequenceAvailable(void) { return new_sequence_available; }
+void SupervisorComms_ClearNewSequence(void)      { new_sequence_available = false; }
 
 void SupervisorComms_LookupEmployee(uint32_t employee_id) {
     char msg[32];
@@ -80,11 +94,14 @@ static void HandleIncomingLine(const char *line) {
         const char *name = line + 14;
         strncpy(operator_name, name, sizeof(operator_name) - 1);
         operator_name[sizeof(operator_name) - 1] = '\0';
-        LCD_ShowArmed(operator_name, run_count, count_goal);
+        LCD_ShowArmed(operator_name, run_count, count_goal, active_part_num);
     } else if (strncmp(line, "SET_GOAL|", 9) == 0) {
         count_goal = (uint16_t)atoi(line + 9);
     } else if (strncmp(line, "SET_COUNT|", 10) == 0) {
         run_count = (uint16_t)atoi(line + 10);
+    } else if (strncmp(line, "SET_PART|", 9) == 0) {
+        strncpy(active_part_num, line + 9, sizeof(active_part_num) - 1);
+        active_part_num[sizeof(active_part_num) - 1] = '\0';
     }
 }
 
@@ -261,6 +278,7 @@ void SupervisorComms_Task(void)
                         // Track active sequence name for heartbeat reporting
                         memcpy(active_seq_name, meta.seq_name, sizeof(active_seq_name) - 1);
                         active_seq_name[sizeof(active_seq_name) - 1] = '\0';
+                        new_sequence_available = true;
 
                         UploadLogs_UART1();  // ship buffered logs to Pi before idling
 

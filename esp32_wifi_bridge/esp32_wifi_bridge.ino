@@ -159,8 +159,7 @@ bool fetchAndSend() {
     return true;
 }
 
-// Extract the first integer value for a given JSON key from a response string.
-// Returns -1 if the key is not found.
+// Extract the first integer value for a given JSON key. Returns -1 if not found.
 static int parseJsonInt(const String& json, const char* key) {
     int idx = json.indexOf(key);
     if (idx < 0) return -1;
@@ -170,6 +169,19 @@ static int parseJsonInt(const String& json, const char* key) {
     while (end < json.length() && isDigit(json[end])) end++;
     if (end == idx) return -1;
     return json.substring(idx, end).toInt();
+}
+
+// Extract a quoted string value for a given JSON key. Returns "" if not found.
+static String parseJsonString(const String& json, const char* key) {
+    int idx = json.indexOf(key);
+    if (idx < 0) return "";
+    idx += strlen(key);
+    while (idx < json.length() && json[idx] != '"') idx++;
+    if (idx >= json.length()) return "";
+    idx++;  // skip opening quote
+    int end = json.indexOf('"', idx);
+    if (end < 0) return "";
+    return json.substring(idx, end);
 }
 
 void forwardHeartbeat(const String& line) {
@@ -221,11 +233,18 @@ void forwardHeartbeat(const String& line) {
         }
 
         // Pi sends "count" only when it needs to override the MCU value
-        // (on boot to restore, or after a part-number reset from the dashboard).
+        // (on boot to restore, or after a UI-triggered reset).
         int countVal = parseJsonInt(resp, "\"count\":");
         if (countVal >= 0) {
             sendToSTM32("SET_COUNT|" + String(countVal) + "\r\n");
             Serial.printf("[BRIDGE] SET_COUNT → %d\n", countVal);
+        }
+
+        // Part number comes from the Pi registry (decoupled from sequence metadata).
+        String partNum = parseJsonString(resp, "\"part_num\":");
+        if (partNum.length() > 0) {
+            sendToSTM32("SET_PART|" + partNum + "\r\n");
+            Serial.printf("[BRIDGE] SET_PART → %s\n", partNum.c_str());
         }
     } else {
         Serial.printf("[BRIDGE] Heartbeat POST failed: HTTP %d\n", code);

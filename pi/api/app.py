@@ -278,7 +278,11 @@ def receive_heartbeat(plc_id: str):
     registry["plc_fault"]      = bool(body.get("fault", 0))
 
     count_goal = registry.get("count_goal", 0)
-    response   = {"status": "ok", "count_goal": count_goal}
+    response   = {
+        "status":     "ok",
+        "count_goal": count_goal,
+        "part_num":   registry.get("plc_part_num", ""),
+    }
 
     is_boot = bool(body.get("boot", 0))
 

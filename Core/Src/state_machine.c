@@ -6,16 +6,22 @@
 #include "safety.h"
 #include "supervisor_comms.h"
 #include "lcd.h"
+#include <stdio.h>
 
 #define ENTER_IDLE() do { \
     system_state.state = STATE_IDLE; \
     system_state.state_entry_time = now; \
     system_state.count_reset_pending = false; \
     Inputs_EnableRFID(true); \
-    LCD_ShowIdle(); \
+    LCD_ShowIdle(SupervisorComms_GetActiveSeqName(), \
+                 SupervisorComms_GetCount(), \
+                 SupervisorComms_GetPartNum()); \
 } while(0)
 
-#define LEAVE_IDLE() do { Inputs_EnableRFID(false); } while(0)
+#define LEAVE_IDLE() do { \
+    Inputs_EnableRFID(false); \
+    SupervisorComms_ClearNewSequence(); \
+} while(0)
 
 
 System_t system_state;
@@ -30,34 +36,34 @@ void StateMachine_Init(void) {
     system_state.count_reset_pending = false;
 }
 
-// Helper: handle two-step count reset via ACK button.
-// Returns true if the caller should skip normal ACK processing (reset is in progress).
+// Two-step count reset via ACK button.
+// Returns true if ACK was consumed (caller should skip its normal action this cycle).
 static bool handle_count_reset(uint32_t now, SystemState_t restore_state) {
+    (void)now;
     if (!inputs.ack_rising_edge) return false;
 
     if (!system_state.count_reset_pending) {
-        // First press — prompt for confirmation
         system_state.count_reset_pending = true;
         LCD_ShowCountResetConfirm(SupervisorComms_GetCount());
         return true;
     } else {
-        // Second press — confirmed
         uint16_t prev = SupervisorComms_GetCount();
         SupervisorComms_ResetCount();
         Logger_Log(LOG_TIER_B, EVENT_COUNT_RESET, prev);
         system_state.count_reset_pending = false;
-        // Restore appropriate LCD
         if (restore_state == STATE_IDLE) {
-            LCD_ShowIdle();
+            LCD_ShowIdle(SupervisorComms_GetActiveSeqName(),
+                         SupervisorComms_GetCount(),
+                         SupervisorComms_GetPartNum());
         } else {
             LCD_ShowArmed(SupervisorComms_GetOperatorName(),
-                          SupervisorComms_GetCount(), SupervisorComms_GetGoal());
+                          SupervisorComms_GetCount(), SupervisorComms_GetGoal(),
+                          SupervisorComms_GetPartNum());
         }
         return true;
     }
 }
 
-// Cancel a pending count reset when another action supersedes it.
 static void cancel_count_reset(void) {
     system_state.count_reset_pending = false;
 }
@@ -65,7 +71,6 @@ static void cancel_count_reset(void) {
 void StateMachine_Update(bool safety_ok) {
     uint32_t now = HAL_GetTick();
 
-    // A1 buffer overflow is a hard fault — machine must halt until E-stop reset
     if (Logger_A1_Overflowed() && system_state.state != STATE_FAULT) {
         Logger_Log(LOG_TIER_B, EVENT_A1_OVERFLOW, 0);
         system_state.fault_request = true;
@@ -87,7 +92,7 @@ void StateMachine_Update(bool safety_ok) {
             Logger_Log(LOG_TIER_B, EVENT_BOOT_COMPLETE, now);
             break;
 
-        case STATE_IDLE:
+        case STATE_IDLE: {
             if (!safety_ok) {
                 cancel_count_reset();
                 system_state.state = STATE_FAULT;
@@ -102,8 +107,35 @@ void StateMachine_Update(bool safety_ok) {
                 idle_logged = true;
             }
 
-            // ACK alone: two-step count reset.
-            // Suppress if PB0 is also held — user may be starting the bypass combo.
+            // New-sequence banner: alternate every 5 s between banner and normal display.
+            // Only runs when nothing else is pending (count reset confirm suppresses it).
+            if (!system_state.count_reset_pending) {
+                static bool     prev_new_seq       = false;
+                static bool     banner_visible      = false;
+                static uint32_t banner_toggle_tick  = 0;
+
+                bool new_seq = SupervisorComms_NewSequenceAvailable();
+
+                if (new_seq && !prev_new_seq) {
+                    // Sequence just arrived — show banner immediately
+                    banner_visible     = true;
+                    banner_toggle_tick = now;
+                    LCD_ShowNewSequence(SupervisorComms_GetActiveSeqName());
+                } else if (new_seq && (now - banner_toggle_tick >= 5000)) {
+                    banner_toggle_tick = now;
+                    banner_visible     = !banner_visible;
+                    if (banner_visible) {
+                        LCD_ShowNewSequence(SupervisorComms_GetActiveSeqName());
+                    } else {
+                        LCD_ShowIdle(SupervisorComms_GetActiveSeqName(),
+                                     SupervisorComms_GetCount(),
+                                     SupervisorComms_GetPartNum());
+                    }
+                }
+                prev_new_seq = new_seq;
+            }
+
+            // ACK alone: two-step count reset
             if (!inputs.run && handle_count_reset(now, STATE_IDLE)) break;
 
             // PB1: fetch latest sequence from server
@@ -112,29 +144,36 @@ void StateMachine_Update(bool safety_ok) {
                 RequestNewSequence();
             }
 
-            // PB0 + ACK held 1 s: bypass arm (no badge required)
+            // PB0 + ACK held 1 s: bypass arm
             if (inputs.both_held_1s) {
                 cancel_count_reset();
                 LEAVE_IDLE();
                 Logger_Log(LOG_TIER_A2, EVENT_LOGIN_BYPASS, 0);
-                LCD_ShowArmed("", SupervisorComms_GetCount(), SupervisorComms_GetGoal());
+                LCD_ShowArmed("Bypass",
+                              SupervisorComms_GetCount(), SupervisorComms_GetGoal(),
+                              SupervisorComms_GetPartNum());
                 SupervisorComms_RequestUpload();
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
             }
 
-            // RFID tap: normal login
+            // RFID tap: normal login — show employee ID as placeholder until name resolves
             if (inputs.rfid_rising_edge) {
                 cancel_count_reset();
                 LEAVE_IDLE();
                 Logger_Log(LOG_TIER_A2, EVENT_LOGIN, inputs.rfid_employee_id);
-                LCD_ShowArmed("", SupervisorComms_GetCount(), SupervisorComms_GetGoal());
+                char emp_str[12];
+                snprintf(emp_str, sizeof(emp_str), "%lu", (unsigned long)inputs.rfid_employee_id);
+                LCD_ShowArmed(emp_str,
+                              SupervisorComms_GetCount(), SupervisorComms_GetGoal(),
+                              SupervisorComms_GetPartNum());
                 SupervisorComms_LookupEmployee(inputs.rfid_employee_id);
                 SupervisorComms_RequestUpload();
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
             }
             break;
+        }
 
         case STATE_ARMED:
             if (!safety_ok) {
@@ -144,7 +183,7 @@ void StateMachine_Update(bool safety_ok) {
                 break;
             }
 
-            // ACK button: two-step count reset (takes priority; skip other actions this cycle)
+            // ACK: two-step count reset
             if (handle_count_reset(now, STATE_ARMED)) break;
 
             // PB0: start sequence
@@ -189,7 +228,8 @@ void StateMachine_Update(bool safety_ok) {
                     system_state.state = STATE_ARMED;
                     system_state.state_entry_time = now;
                     LCD_ShowArmed(SupervisorComms_GetOperatorName(),
-                                  SupervisorComms_GetCount(), SupervisorComms_GetGoal());
+                                  SupervisorComms_GetCount(), SupervisorComms_GetGoal(),
+                                  SupervisorComms_GetPartNum());
                 }
             }
             break;
@@ -211,7 +251,9 @@ void StateMachine_Update(bool safety_ok) {
                 Logger_Log(LOG_TIER_B, EVENT_COUNT_RESET, prev);
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
-                LCD_ShowArmed(SupervisorComms_GetOperatorName(), 0, SupervisorComms_GetGoal());
+                LCD_ShowArmed(SupervisorComms_GetOperatorName(),
+                              0, SupervisorComms_GetGoal(),
+                              SupervisorComms_GetPartNum());
             }
             break;
 
@@ -222,8 +264,8 @@ void StateMachine_Update(bool safety_ok) {
             if (inputs.estop_release_edge) {
                 Logger_Log(LOG_TIER_A1, EVENT_SAFETY_RESET, 0);
                 SupervisorComms_RequestUpload();
-                FAULT_LATCHED     = false;
-                ESTOP_ASSERTED    = false;
+                FAULT_LATCHED  = false;
+                ESTOP_ASSERTED = false;
                 Logger_ClearA1Overflow();
                 ENTER_IDLE();
             }

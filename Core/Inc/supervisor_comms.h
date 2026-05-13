@@ -32,6 +32,15 @@ void SupervisorComms_SetActiveSeqName(const char *name);
 // Returns the currently active sequence name (e.g. "seq_001").
 const char* SupervisorComms_GetActiveSeqName(void);
 
+// Active part number — set from sequence metadata on receive/load.
+void        SupervisorComms_SetPartNum(const char *part_num);
+const char* SupervisorComms_GetPartNum(void);
+
+// Set when a new sequence frame is successfully received.
+// Cleared when the operator leaves IDLE so the banner isn't shown again for the same sequence.
+bool SupervisorComms_NewSequenceAvailable(void);
+void SupervisorComms_ClearNewSequence(void);
+
 // Ask the ESP32 to resolve an employee number to a display name.
 // The response arrives asynchronously and is stored internally.
 void SupervisorComms_LookupEmployee(uint32_t employee_id);

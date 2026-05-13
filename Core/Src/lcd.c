@@ -123,21 +123,24 @@ static void lcd_print_row(uint8_t row, const char *fmt, ...) {
     LCD_Print(buf);
 }
 
-void LCD_ShowIdle(void) {
-    lcd_print_row(0, "  PLC System    ");
-    lcd_print_row(1, "  Scan Badge... ");
+void LCD_ShowIdle(const char *seq_name, uint16_t count, const char *part_num) {
+    lcd_print_row(0, "%.16s", (seq_name && seq_name[0]) ? seq_name : "No sequence");
+    lcd_print_row(1, "%u  %s", count, (part_num && part_num[0]) ? part_num : "---");
 }
 
-void LCD_ShowArmed(const char *operator_name, uint16_t count, uint16_t goal) {
-    if (operator_name && operator_name[0] != '\0') {
-        lcd_print_row(0, "Op: %.12s", operator_name);
-    } else {
-        lcd_print_row(0, "Bypass Mode");
-    }
+void LCD_ShowNewSequence(const char *seq_name) {
+    lcd_print_row(0, "New sequence!");
+    lcd_print_row(1, "%.16s", seq_name ? seq_name : "");
+}
+
+void LCD_ShowArmed(const char *operator_display, uint16_t count, uint16_t goal, const char *part_num) {
+    // Row 0: operator name, employee number, or "Bypass"
+    lcd_print_row(0, "%.16s", (operator_display && operator_display[0]) ? operator_display : "Bypass");
+    // Row 1: count(/goal) then part_num, truncated to fit
     if (goal > 0) {
-        lcd_print_row(1, "Cnt:%u/%u", count, goal);
+        lcd_print_row(1, "%u/%u %s", count, goal, (part_num && part_num[0]) ? part_num : "");
     } else {
-        lcd_print_row(1, "Press RUN btn");
+        lcd_print_row(1, "%u  %s", count, (part_num && part_num[0]) ? part_num : "");
     }
 }
 
