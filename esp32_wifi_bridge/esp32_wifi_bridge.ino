@@ -159,15 +159,29 @@ bool fetchAndSend() {
     return true;
 }
 
+// Extract the first integer value for a given JSON key from a response string.
+// Returns -1 if the key is not found.
+static int parseJsonInt(const String& json, const char* key) {
+    int idx = json.indexOf(key);
+    if (idx < 0) return -1;
+    idx += strlen(key);
+    while (idx < json.length() && !isDigit(json[idx])) idx++;
+    int end = idx;
+    while (end < json.length() && isDigit(json[end])) end++;
+    if (end == idx) return -1;
+    return json.substring(idx, end).toInt();
+}
+
 void forwardHeartbeat(const String& line) {
-    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault|count"
+    // Parse "HEARTBEAT|tick_ms|state|seq_name|fault|count|boot"
     int p1 = line.indexOf('|');
     int p2 = line.indexOf('|', p1 + 1);
     int p3 = line.indexOf('|', p2 + 1);
     int p4 = line.indexOf('|', p3 + 1);
     int p5 = line.indexOf('|', p4 + 1);
+    int p6 = line.indexOf('|', p5 + 1);
 
-    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) {
+    if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0 || p6 < 0) {
         Serial.printf("[BRIDGE] Malformed heartbeat: '%s'\n", line.c_str());
         return;
     }
@@ -176,10 +190,12 @@ void forwardHeartbeat(const String& line) {
     String state   = line.substring(p2 + 1, p3);
     String seqName = line.substring(p3 + 1, p4);
     String fault   = line.substring(p4 + 1, p5);
-    String count   = line.substring(p5 + 1);
+    String count   = line.substring(p5 + 1, p6);
+    String boot    = line.substring(p6 + 1);
 
-    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s count=%s\n",
-                  tick.c_str(), state.c_str(), seqName.c_str(), fault.c_str(), count.c_str());
+    Serial.printf("[BRIDGE] HB tick=%s state=%s seq=%s fault=%s count=%s boot=%s\n",
+                  tick.c_str(), state.c_str(), seqName.c_str(),
+                  fault.c_str(), count.c_str(), boot.c_str());
 
     if (WiFi.status() != WL_CONNECTED) return;
 
@@ -187,7 +203,8 @@ void forwardHeartbeat(const String& line) {
                   ",\"state\":"  + state   +
                   ",\"seq\":\""  + seqName + "\"" +
                   ",\"fault\":"  + fault   +
-                  ",\"count\":"  + count   + "}";
+                  ",\"count\":"  + count   +
+                  ",\"boot\":"   + boot    + "}";
 
     HTTPClient http;
     http.begin(PI_HEARTBEAT_URL);
@@ -196,18 +213,19 @@ void forwardHeartbeat(const String& line) {
 
     if (code == HTTP_CODE_OK) {
         String resp = http.getString();
-        // Look for "count_goal" in response and forward to STM32
-        int goalIdx = resp.indexOf("\"count_goal\":");
-        if (goalIdx >= 0) {
-            goalIdx += 13;
-            while (goalIdx < resp.length() && !isDigit(resp[goalIdx])) goalIdx++;
-            int goalEnd = goalIdx;
-            while (goalEnd < resp.length() && isDigit(resp[goalEnd])) goalEnd++;
-            if (goalEnd > goalIdx) {
-                String goalStr = resp.substring(goalIdx, goalEnd);
-                sendToSTM32("SET_GOAL|" + goalStr + "\r\n");
-                Serial.printf("[BRIDGE] SET_GOAL → %s\n", goalStr.c_str());
-            }
+
+        int goalVal = parseJsonInt(resp, "\"count_goal\":");
+        if (goalVal >= 0) {
+            sendToSTM32("SET_GOAL|" + String(goalVal) + "\r\n");
+            Serial.printf("[BRIDGE] SET_GOAL → %d\n", goalVal);
+        }
+
+        // Pi sends "count" only when it needs to override the MCU value
+        // (on boot to restore, or after a part-number reset from the dashboard).
+        int countVal = parseJsonInt(resp, "\"count\":");
+        if (countVal >= 0) {
+            sendToSTM32("SET_COUNT|" + String(countVal) + "\r\n");
+            Serial.printf("[BRIDGE] SET_COUNT → %d\n", countVal);
         }
     } else {
         Serial.printf("[BRIDGE] Heartbeat POST failed: HTTP %d\n", code);

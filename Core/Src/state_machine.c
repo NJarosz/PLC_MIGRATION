@@ -7,8 +7,15 @@
 #include "supervisor_comms.h"
 #include "lcd.h"
 
-#define ENTER_IDLE()  do { system_state.state = STATE_IDLE;  system_state.state_entry_time = now; Inputs_EnableRFID(true);  LCD_ShowIdle();   } while(0)
-#define LEAVE_IDLE()  do {                                                                          Inputs_EnableRFID(false);                   } while(0)
+#define ENTER_IDLE() do { \
+    system_state.state = STATE_IDLE; \
+    system_state.state_entry_time = now; \
+    system_state.count_reset_pending = false; \
+    Inputs_EnableRFID(true); \
+    LCD_ShowIdle(); \
+} while(0)
+
+#define LEAVE_IDLE() do { Inputs_EnableRFID(false); } while(0)
 
 
 System_t system_state;
@@ -20,14 +27,47 @@ void StateMachine_Init(void) {
     system_state.current_step = 0;
     system_state.step_start_time = 0;
     system_state.fault_request = false;
+    system_state.count_reset_pending = false;
+}
+
+// Helper: handle two-step count reset via ACK button.
+// Returns true if the caller should skip normal ACK processing (reset is in progress).
+static bool handle_count_reset(uint32_t now, SystemState_t restore_state) {
+    if (!inputs.ack_rising_edge) return false;
+
+    if (!system_state.count_reset_pending) {
+        // First press — prompt for confirmation
+        system_state.count_reset_pending = true;
+        LCD_ShowCountResetConfirm(SupervisorComms_GetCount());
+        return true;
+    } else {
+        // Second press — confirmed
+        uint16_t prev = SupervisorComms_GetCount();
+        SupervisorComms_ResetCount();
+        Logger_Log(LOG_TIER_B, EVENT_COUNT_RESET, prev);
+        system_state.count_reset_pending = false;
+        // Restore appropriate LCD
+        if (restore_state == STATE_IDLE) {
+            LCD_ShowIdle();
+        } else {
+            LCD_ShowArmed(SupervisorComms_GetOperatorName(),
+                          SupervisorComms_GetCount(), SupervisorComms_GetGoal());
+        }
+        return true;
+    }
+}
+
+// Cancel a pending count reset when another action supersedes it.
+static void cancel_count_reset(void) {
+    system_state.count_reset_pending = false;
 }
 
 void StateMachine_Update(bool safety_ok) {
     uint32_t now = HAL_GetTick();
 
-    // A1 buffer overflow is a hard fault — machine must halt until operator reset
+    // A1 buffer overflow is a hard fault — machine must halt until E-stop reset
     if (Logger_A1_Overflowed() && system_state.state != STATE_FAULT) {
-        Logger_Log(LOG_TIER_B, EVENT_A1_OVERFLOW, 0);  // LOG_TIER_B: A1 is full, use general buffer
+        Logger_Log(LOG_TIER_B, EVENT_A1_OVERFLOW, 0);
         system_state.fault_request = true;
     }
 
@@ -35,6 +75,7 @@ void StateMachine_Update(bool safety_ok) {
         system_state.state = STATE_FAULT;
         system_state.state_entry_time = now;
         system_state.sequence_active = false;
+        system_state.count_reset_pending = false;
         system_state.fault_request = false;
         LCD_ShowFault();
     }
@@ -48,6 +89,7 @@ void StateMachine_Update(bool safety_ok) {
 
         case STATE_IDLE:
             if (!safety_ok) {
+                cancel_count_reset();
                 system_state.state = STATE_FAULT;
                 system_state.state_entry_time = now;
                 LCD_ShowFault();
@@ -60,13 +102,30 @@ void StateMachine_Update(bool safety_ok) {
                 idle_logged = true;
             }
 
-            // PB0: request latest sequence from server
-            if (inputs.run_rising_edge) {
+            // ACK alone: two-step count reset.
+            // Suppress if PB0 is also held — user may be starting the bypass combo.
+            if (!inputs.run && handle_count_reset(now, STATE_IDLE)) break;
+
+            // PB1: fetch latest sequence from server
+            if (inputs.bypass_rising_edge) {
+                cancel_count_reset();
                 RequestNewSequence();
+            }
+
+            // PB0 + ACK held 1 s: bypass arm (no badge required)
+            if (inputs.both_held_1s) {
+                cancel_count_reset();
+                LEAVE_IDLE();
+                Logger_Log(LOG_TIER_A2, EVENT_LOGIN_BYPASS, 0);
+                LCD_ShowArmed("", SupervisorComms_GetCount(), SupervisorComms_GetGoal());
+                SupervisorComms_RequestUpload();
+                system_state.state = STATE_ARMED;
+                system_state.state_entry_time = now;
             }
 
             // RFID tap: normal login
             if (inputs.rfid_rising_edge) {
+                cancel_count_reset();
                 LEAVE_IDLE();
                 Logger_Log(LOG_TIER_A2, EVENT_LOGIN, inputs.rfid_employee_id);
                 LCD_ShowArmed("", SupervisorComms_GetCount(), SupervisorComms_GetGoal());
@@ -75,27 +134,22 @@ void StateMachine_Update(bool safety_ok) {
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
             }
-
-            // PB1: bypass arm (lost card / bypass switch in production)
-            if (inputs.bypass_short_release) {
-                LEAVE_IDLE();
-                Logger_Log(LOG_TIER_A2, EVENT_LOGIN_BYPASS, 0);
-                LCD_ShowArmed("", SupervisorComms_GetCount(), SupervisorComms_GetGoal());
-                SupervisorComms_RequestUpload();
-                system_state.state = STATE_ARMED;
-                system_state.state_entry_time = now;
-            }
             break;
 
         case STATE_ARMED:
             if (!safety_ok) {
+                cancel_count_reset();
                 system_state.state = STATE_FAULT;
                 system_state.state_entry_time = now;
                 break;
             }
 
+            // ACK button: two-step count reset (takes priority; skip other actions this cycle)
+            if (handle_count_reset(now, STATE_ARMED)) break;
+
             // PB0: start sequence
             if (inputs.run_rising_edge) {
+                cancel_count_reset();
                 system_state.state = STATE_RUNNING;
                 Logger_Log(LOG_TIER_A3, EVENT_SEQUENCE_START, now);
                 system_state.state_entry_time = now;
@@ -106,20 +160,13 @@ void StateMachine_Update(bool safety_ok) {
                                 SupervisorComms_GetCount(), SupervisorComms_GetGoal());
             }
 
-            // PB1 short tap: logoff back to IDLE
-            if (inputs.bypass_short_release) {
+            // PB1: logoff back to IDLE
+            if (inputs.bypass_rising_edge) {
+                cancel_count_reset();
                 Logger_Log(LOG_TIER_A2, EVENT_LOGOUT, inputs.rfid_employee_id);
                 SupervisorComms_ClearOperatorName();
                 SupervisorComms_RequestUpload();
                 ENTER_IDLE();
-            }
-
-            // PB1 hold 2s: reset run count without logging off
-            if (inputs.bypass_hold_2s) {
-                uint16_t prev = SupervisorComms_GetCount();
-                SupervisorComms_ResetCount();
-                Logger_Log(LOG_TIER_B, EVENT_COUNT_RESET, prev);
-                LCD_ShowArmed(SupervisorComms_GetOperatorName(), 0, SupervisorComms_GetGoal());
             }
             break;
 
@@ -157,8 +204,8 @@ void StateMachine_Update(bool safety_ok) {
                 break;
             }
 
-            // Short press: acknowledge goal, reset count, return to ARMED
-            if (inputs.bypass_short_release) {
+            // ACK: acknowledge goal — reset count, return to ARMED
+            if (inputs.ack_rising_edge) {
                 uint16_t prev = SupervisorComms_GetCount();
                 SupervisorComms_ResetCount();
                 Logger_Log(LOG_TIER_B, EVENT_COUNT_RESET, prev);
@@ -171,15 +218,13 @@ void StateMachine_Update(bool safety_ok) {
         case STATE_FAULT:
             system_state.sequence_active = false;
 
-            bool reset_pressed = (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET);
-            bool estop_released = !inputs.estop;  // Assuming active-low; adjust if active-high
-
-            if (reset_pressed && estop_released) {
+            // E-stop released → automatic fault clear
+            if (inputs.estop_release_edge) {
                 Logger_Log(LOG_TIER_A1, EVENT_SAFETY_RESET, 0);
                 SupervisorComms_RequestUpload();
-                FAULT_LATCHED = false;
-                ESTOP_ASSERTED = false;
-                Logger_ClearA1Overflow();  // allow A1 overflow check to re-arm after reset
+                FAULT_LATCHED     = false;
+                ESTOP_ASSERTED    = false;
+                Logger_ClearA1Overflow();
                 ENTER_IDLE();
             }
             break;

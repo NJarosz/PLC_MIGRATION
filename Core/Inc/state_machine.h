@@ -20,6 +20,7 @@ typedef struct {
     uint8_t current_step;
     uint32_t step_start_time;
     bool fault_request;
+    bool count_reset_pending;  // two-step count reset: true = waiting for ACK confirm
 } System_t;
 
 void StateMachine_Init(void);

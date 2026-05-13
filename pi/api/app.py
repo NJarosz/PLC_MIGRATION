@@ -276,11 +276,27 @@ def receive_heartbeat(plc_id: str):
     registry["plc_state"]      = _STATE_NAMES.get(body.get("state"), "UNKNOWN")
     registry["plc_seq"]        = seq_name
     registry["plc_fault"]      = bool(body.get("fault", 0))
-    registry["plc_count"]      = int(body.get("count", 0))
 
     count_goal = registry.get("count_goal", 0)
+    response   = {"status": "ok", "count_goal": count_goal}
+
+    is_boot = bool(body.get("boot", 0))
+
+    if is_boot:
+        # MCU just powered on — return the stored count so the MCU can restore it.
+        # Don't overwrite plc_count with the MCU's freshly-reset 0.
+        response["count"] = registry.get("plc_count", 0)
+    elif registry.get("count_reset_requested"):
+        # A part-number change was saved via the UI — push 0 to the MCU now.
+        response["count"] = 0
+        registry["plc_count"] = 0
+        registry.pop("count_reset_requested", None)
+    else:
+        # Normal heartbeat — MCU is authoritative; update the registry.
+        registry["plc_count"] = int(body.get("count", 0))
+
     save_registry(plc_id, registry)
-    return jsonify({"status": "ok", "count_goal": count_goal})
+    return jsonify(response)
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +499,12 @@ def api_plc_config(plc_id: str):
     if "description" in body:
         registry["description"] = str(body["description"])
     if "part_num" in body:
-        registry["plc_part_num"] = str(body["part_num"])
+        new_part = str(body["part_num"])
+        if new_part != registry.get("plc_part_num", ""):
+            # Part number changed — flag the MCU count for reset on next heartbeat.
+            registry["count_reset_requested"] = True
+            registry["plc_count"] = 0
+        registry["plc_part_num"] = new_part
     if "machine_id" in body:
         registry["plc_machine_id"] = str(body["machine_id"])
 

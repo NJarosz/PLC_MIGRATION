@@ -38,6 +38,7 @@ static volatile bool upload_requested = false;
 static char operator_name[32] = "";
 static uint16_t run_count  = 0;
 static uint16_t count_goal = 0;  // 0 = no goal active
+static bool boot_heartbeat_pending = true;  // cleared after first heartbeat; Pi uses it to restore count
 
 void SupervisorComms_RequestUpload(void) {
     upload_requested = true;
@@ -66,12 +67,13 @@ void SupervisorComms_ClearOperatorName(void) {
     operator_name[0] = '\0';
 }
 
-void SupervisorComms_IncrementCount(void) { run_count++; }
-void SupervisorComms_ResetCount(void)     { run_count = 0; }
-uint16_t SupervisorComms_GetCount(void)   { return run_count; }
-uint16_t SupervisorComms_GetGoal(void)    { return count_goal; }
-bool SupervisorComms_IsGoalReached(void)  { return count_goal > 0 && run_count >= count_goal; }
-void SupervisorComms_SetGoal(uint16_t goal) { count_goal = goal; }
+void SupervisorComms_IncrementCount(void)       { run_count++; }
+void SupervisorComms_ResetCount(void)           { run_count = 0; }
+void SupervisorComms_SetCount(uint16_t count)   { run_count = count; }
+uint16_t SupervisorComms_GetCount(void)         { return run_count; }
+uint16_t SupervisorComms_GetGoal(void)          { return count_goal; }
+bool SupervisorComms_IsGoalReached(void)        { return count_goal > 0 && run_count >= count_goal; }
+void SupervisorComms_SetGoal(uint16_t goal)     { count_goal = goal; }
 
 static void HandleIncomingLine(const char *line) {
     if (strncmp(line, "EMPLOYEE_NAME|", 14) == 0) {
@@ -81,6 +83,8 @@ static void HandleIncomingLine(const char *line) {
         LCD_ShowArmed(operator_name, run_count, count_goal);
     } else if (strncmp(line, "SET_GOAL|", 9) == 0) {
         count_goal = (uint16_t)atoi(line + 9);
+    } else if (strncmp(line, "SET_COUNT|", 10) == 0) {
+        run_count = (uint16_t)atoi(line + 10);
     }
 }
 
@@ -106,20 +110,24 @@ static void UploadLogs_UART1(void)
 }
 
 
-// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>|<count>\r\n
+// Format: HEARTBEAT|<tick_ms>|<state>|<seq_name>|<fault>|<count>|<boot>\r\n
+// boot=1 on the first heartbeat after power-on; Pi uses it to restore the stored count.
 // State codes: 0=BOOT 1=IDLE 2=ARMED 3=RUNNING 4=FAULT 5=GOAL_MET
 static void SendHeartbeat(void)
 {
     char line[80];
     uint8_t fault_flag = (FAULT_LATCHED || system_state.state == STATE_FAULT) ? 1 : 0;
+    uint8_t boot_flag  = boot_heartbeat_pending ? 1 : 0;
 
-    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u|%u\r\n",
+    int len = snprintf(line, sizeof(line), "HEARTBEAT|%lu|%u|%s|%u|%u|%u\r\n",
                        (unsigned long)HAL_GetTick(),
                        (unsigned int)system_state.state,
                        active_seq_name,
                        fault_flag,
-                       run_count);
+                       run_count,
+                       boot_flag);
     HAL_UART_Transmit(&huart1, (uint8_t*)line, (uint16_t)len, 50);
+    boot_heartbeat_pending = false;
 }
 
 

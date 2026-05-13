@@ -47,6 +47,7 @@ void SupervisorComms_ClearOperatorName(void);
 // goal = 0 means no goal is active.
 void     SupervisorComms_IncrementCount(void);
 void     SupervisorComms_ResetCount(void);
+void     SupervisorComms_SetCount(uint16_t count);   // called on boot to restore Pi-persisted count
 uint16_t SupervisorComms_GetCount(void);
 uint16_t SupervisorComms_GetGoal(void);
 bool     SupervisorComms_IsGoalReached(void);

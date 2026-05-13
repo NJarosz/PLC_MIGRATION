@@ -152,7 +152,12 @@ void LCD_ShowRunning(const char *seq_name, uint16_t count, uint16_t goal) {
 
 void LCD_ShowGoalReached(uint16_t count, uint16_t goal) {
     lcd_print_row(0, "GOAL REACHED!");
-    lcd_print_row(1, "Cnt:%u/%u OK", count, goal);
+    lcd_print_row(1, "Cnt:%u/%u  ACK", count, goal);
+}
+
+void LCD_ShowCountResetConfirm(uint16_t count) {
+    lcd_print_row(0, "Reset cnt: %u?", count);
+    lcd_print_row(1, "ACK=Yes  Other=No");
 }
 
 void LCD_ShowFault(void) {
