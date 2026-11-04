@@ -167,3 +167,18 @@ void LCD_ShowFault(void) {
     lcd_print_row(0, "!!! FAULT !!!   ");
     lcd_print_row(1, "Reset to clear  ");
 }
+
+void LCD_ShowManual(const bool *relay_states, uint8_t count) {
+    lcd_print_row(0, "MANUAL  PB1=exit");
+    // Row 1: each relay gets 2 chars — its number (1-8) if ON, '-' if OFF, then a space.
+    // 8 relays × 2 chars = 16 chars exactly.
+    char row1[17];
+    for (uint8_t i = 0; i < 16; i++) row1[i] = ' ';
+    row1[16] = '\0';
+    for (uint8_t i = 0; i < count && i < 8; i++) {
+        row1[i * 2]     = relay_states[i] ? (char)('1' + i) : '-';
+        row1[i * 2 + 1] = ' ';
+    }
+    LCD_SetCursor(0, 1);
+    LCD_Print(row1);
+}

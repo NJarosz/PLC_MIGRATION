@@ -355,12 +355,15 @@ function designer() {
                 body:    JSON.stringify(this.toDefinition()),
             });
             if (r.ok) {
+                await this.refreshSavedList();
+                // Reload from server to confirm what was actually written
+                await this.loadSequence(this.seq_id.trim());
                 this.dirty = false;
                 this.setStatus('Saved ✓', 'ok');
-                await this.refreshSavedList();
                 return true;
             }
-            this.setStatus('Save failed', 'err');
+            const err = await r.json().catch(() => ({}));
+            this.setStatus(`Save failed: ${err.description || r.status}`, 'err');
             return false;
         },
 

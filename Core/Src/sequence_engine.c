@@ -34,6 +34,9 @@ void SequenceEngine_SetLength(uint8_t len)
 
 void SequenceEngine_Update(void)
 {
+    if (system_state.state == STATE_MANUAL)
+        return;  // outputs owned by state machine in manual mode
+
     if (system_state.state != STATE_RUNNING)
     {
         for (int i = 0; i < NUM_RELAYS; i++)

@@ -25,12 +25,19 @@ typedef struct {
     bool     ack_last;
     bool     ack_rising_edge;
 
-    // Combo: PB0 + ACK held simultaneously for 1 s → bypass arm from IDLE
-    bool     both_held_1s;        // fires once per hold
+    // Combo: PB1 + ACK held simultaneously for 1 s → bypass arm from IDLE
+    bool     bypass_ack_held_1s;  // fires once per hold
+
+    // Combo: PB0 + PB1 held simultaneously for 2 s → enter manual/jog mode from IDLE
+    bool     both_pb_held_2s;     // fires once per hold
 
     // RFID
     bool     rfid_rising_edge;    // true for one scan cycle on each new badge tap
     uint32_t rfid_employee_id;    // employee number from last successful card read
+
+    // Manual mode toggle switches (one per relay, index 0 = relay 1)
+    // Actively read every scan cycle; state machine gates actual use to STATE_MANUAL.
+    bool     manual_sw[8];        // sized for max 8 relays; only [0..NUM_RELAYS-1] are wired
 } Inputs_t;
 
 void Inputs_Init(void);

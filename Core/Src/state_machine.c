@@ -6,6 +6,8 @@
 #include "safety.h"
 #include "supervisor_comms.h"
 #include "lcd.h"
+#include "outputs.h"
+#include <string.h>
 #include <stdio.h>
 
 #define ENTER_IDLE() do { \
@@ -135,8 +137,18 @@ void StateMachine_Update(bool safety_ok) {
                 prev_new_seq = new_seq;
             }
 
-            // ACK alone: two-step count reset
-            if (!inputs.run && handle_count_reset(now, STATE_IDLE)) break;
+            // Any non-ACK button press cancels a pending count reset and restores the display
+            if (system_state.count_reset_pending &&
+                (inputs.run_rising_edge || inputs.bypass_rising_edge)) {
+                cancel_count_reset();
+                LCD_ShowIdle(SupervisorComms_GetActiveSeqName(),
+                             SupervisorComms_GetCount(),
+                             SupervisorComms_GetPartNum());
+                break;
+            }
+
+            // ACK alone: two-step count reset (suppressed when PB1 held, to avoid clash with bypass arm)
+            if (!inputs.bypass && handle_count_reset(now, STATE_IDLE)) break;
 
             // PB1: fetch latest sequence from server
             if (inputs.bypass_rising_edge) {
@@ -144,8 +156,8 @@ void StateMachine_Update(bool safety_ok) {
                 RequestNewSequence();
             }
 
-            // PB0 + ACK held 1 s: bypass arm
-            if (inputs.both_held_1s) {
+            // PB1 + ACK held 1 s: bypass arm
+            if (inputs.bypass_ack_held_1s) {
                 cancel_count_reset();
                 LEAVE_IDLE();
                 Logger_Log(LOG_TIER_A2, EVENT_LOGIN_BYPASS, 0);
@@ -155,6 +167,16 @@ void StateMachine_Update(bool safety_ok) {
                 SupervisorComms_RequestUpload();
                 system_state.state = STATE_ARMED;
                 system_state.state_entry_time = now;
+            }
+
+            // PB0 + PB1 held 2 s: enter manual/jog mode
+            if (inputs.both_pb_held_2s) {
+                cancel_count_reset();
+                LEAVE_IDLE();
+                Logger_Log(LOG_TIER_A2, EVENT_MANUAL_ENTER, 0);
+                system_state.state = STATE_MANUAL;
+                system_state.state_entry_time = now;
+                LCD_ShowManual(outputs.relay_requested, NUM_RELAYS);
             }
 
             // RFID tap: normal login — show employee ID as placeholder until name resolves
@@ -268,6 +290,44 @@ void StateMachine_Update(bool safety_ok) {
                 ESTOP_ASSERTED = false;
                 Logger_ClearA1Overflow();
                 ENTER_IDLE();
+            }
+            break;
+
+        case STATE_MANUAL:
+            system_state.sequence_active = false;
+
+            // E-stop hit during jog → cut outputs and fault immediately
+            if (!safety_ok) {
+                for (int i = 0; i < NUM_RELAYS; i++) outputs.relay_requested[i] = false;
+                Logger_Log(LOG_TIER_B, EVENT_MANUAL_EXIT, 0);
+                system_state.state = STATE_FAULT;
+                system_state.state_entry_time = now;
+                LCD_ShowFault();
+                break;
+            }
+
+            // Map toggle switches → relay requested, update LCD only on change.
+            {
+                static bool last_sw[NUM_RELAYS];
+                bool changed = false;
+                for (int i = 0; i < NUM_RELAYS; i++) {
+                    outputs.relay_requested[i] = inputs.manual_sw[i];
+                    if (inputs.manual_sw[i] != last_sw[i]) {
+                        last_sw[i] = inputs.manual_sw[i];
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    LCD_ShowManual(outputs.relay_requested, NUM_RELAYS);
+                }
+            }
+
+            // PB1: exit manual mode, return to IDLE.
+            if (inputs.bypass_rising_edge) {
+                for (int i = 0; i < NUM_RELAYS; i++) outputs.relay_requested[i] = false;
+                Logger_Log(LOG_TIER_B, EVENT_MANUAL_EXIT, 0);
+                ENTER_IDLE();
+                break;
             }
             break;
     }

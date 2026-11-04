@@ -32,6 +32,13 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 app = Flask(__name__)
 
+@app.after_request
+def no_cache(response):
+    if request.path.startswith('/api/') or request.path in ('/health', '/events'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+    return response
+
 # All paths are resolved relative to the server root (one level up from api/)
 SERVER_ROOT     = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 REGISTRY_DIR    = os.path.join(SERVER_ROOT, "plc_registry")

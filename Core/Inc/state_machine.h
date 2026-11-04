@@ -10,7 +10,8 @@ typedef enum {
     STATE_ARMED,
     STATE_RUNNING,
     STATE_FAULT,
-    STATE_GOAL_MET    // count reached goal; waiting for operator acknowledgement
+    STATE_GOAL_MET,   // count reached goal; waiting for operator acknowledgement
+    STATE_MANUAL      // manual/jog mode: operator drives relay outputs individually
 } SystemState_t;
 
 typedef struct {

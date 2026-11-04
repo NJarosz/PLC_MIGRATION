@@ -2,6 +2,7 @@
 #define LCD_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 void LCD_Init(void);
 void LCD_Clear(void);
@@ -17,5 +18,6 @@ void LCD_ShowRunning(const char *seq_name, uint16_t count, uint16_t goal);
 void LCD_ShowGoalReached(uint16_t count, uint16_t goal);
 void LCD_ShowCountResetConfirm(uint16_t count);
 void LCD_ShowFault(void);
+void LCD_ShowManual(const bool *relay_states, uint8_t count);
 
 #endif

@@ -43,6 +43,8 @@ typedef enum {
     EVENT_SEQUENCE_COMPLETE = 603,  // sequence engine finished all steps; data = step count
     EVENT_LOGIN_BYPASS = 604,       // operator armed without RFID (bypass mode)
     EVENT_COUNT_RESET  = 605,       // run count manually reset; data = previous count
+    EVENT_MANUAL_ENTER = 606,       // entered manual/jog mode
+    EVENT_MANUAL_EXIT  = 607,       // exited manual/jog mode
     EVENT_DEBUG_STEP_TIMING = 700
 
 } EventCode_t;

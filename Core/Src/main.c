@@ -146,6 +146,7 @@ int main(void)
     SequenceEngine_Update();  // Update sequence if running
 
     Outputs_Apply(safety_ok);  // Apply gated outputs
+    Outputs_UpdateLEDs(system_state.state);  // Update HMI panel LEDs
 
     SupervisorComms_Task();  // ESP32 comms: heartbeat, log upload, sequence receive
 
